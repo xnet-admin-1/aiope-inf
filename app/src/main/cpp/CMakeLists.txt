@@ -1,79 +1,100 @@
 cmake_minimum_required(VERSION 3.18)
-project("llama-jni-android")
+project("aiope-inf" LANGUAGES C CXX)
 
-# Set Android-specific variables
+# Build configuration
 set(CMAKE_VERBOSE_MAKEFILE ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
 
-# Download and build llama.cpp
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp")
-    message(STATUS "Downloading llama.cpp...")
-    execute_process(
-        COMMAND git clone --depth 1 --branch master https://github.com/ggerganov/llama.cpp.git
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    )
+# ARM64-v8a optimizations
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -ffast-math -fno-finite-math-only")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -ffast-math -fno-finite-math-only")
+
+# Option: GPU acceleration via Vulkan
+option(AIOPE_VULKAN "Enable Vulkan GPU acceleration" ON)
+
+# ============================================================
+# llama.cpp integration (submodule at app/src/main/cpp/llama.cpp)
+# ============================================================
+set(LLAMA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp")
+
+if(NOT EXISTS "${LLAMA_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "llama.cpp not found at ${LLAMA_DIR}. Run: git submodule update --init")
 endif()
 
-# Configure llama.cpp
-set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "")
-set(LLAMA_BUILD_TESTS OFF CACHE BOOL "")
-set(LLAMA_CURL OFF CACHE BOOL "")
-set(LLAMA_NATIVE OFF CACHE BOOL "")
-set(LLAMA_MPI OFF CACHE BOOL "")
-set(LLAMA_OPENBLAS OFF CACHE BOOL "")
-set(LLAMA_CUBLAS OFF CACHE BOOL "")
-set(LLAMA_CLBLAST OFF CACHE BOOL "")
-set(LLAMA_VULKAN OFF CACHE BOOL "")  # Enable if you have Vulkan support
-set(LLAMA_METAL OFF CACHE BOOL "")   # Android doesn't support Metal
-set(LLAMA_KOMPUTE OFF CACHE BOOL "")
-set(LLAMA_SYCL OFF CACHE BOOL "")
-set(LLAMA_OPENCL OFF CACHE BOOL "")
-set(LLAMA_HIPBLAS OFF CACHE BOOL "")
-set(LLAMA_BUILD_SERVER OFF CACHE BOOL "")
+# llama.cpp build options
+set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
+set(LLAMA_NATIVE OFF CACHE BOOL "" FORCE)
+set(LLAMA_MPI OFF CACHE BOOL "" FORCE)
+set(LLAMA_OPENBLAS OFF CACHE BOOL "" FORCE)
+set(LLAMA_METAL OFF CACHE BOOL "" FORCE)
+set(LLAMA_CUDA OFF CACHE BOOL "" FORCE)
+set(LLAMA_HIPBLAS OFF CACHE BOOL "" FORCE)
+set(LLAMA_SYCL OFF CACHE BOOL "" FORCE)
+set(LLAMA_KOMPUTE OFF CACHE BOOL "" FORCE)
 
-# Include llama.cpp
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+# Vulkan GPU acceleration
+if(AIOPE_VULKAN)
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    message(STATUS "AIOPE-INF: Vulkan GPU acceleration ENABLED")
+else()
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+    message(STATUS "AIOPE-INF: CPU-only mode")
+endif()
 
-# Create our JNI library
-add_library(llama-jni SHARED
-    src/main/jni/llama_jni.cpp
-    src/main/jni/jni_utils.cpp
+# Include llama.cpp as subdirectory
+add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama.cpp EXCLUDE_FROM_ALL)
+
+# ============================================================
+# JNI shared library: libaiope-inf.so
+# ============================================================
+add_library(aiope-inf SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jni/llama_jni.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jni/streaming.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jni/quantize.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jni/gpu_backend.cpp
 )
 
-# Include directories
-target_include_directories(llama-jni PRIVATE
-    ${LLAMA_INCLUDE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/main/jni
-    ${Android_INCLUDE_DIRS}
+target_include_directories(aiope-inf PRIVATE
+    ${LLAMA_DIR}/include
+    ${LLAMA_DIR}/common
+    ${LLAMA_DIR}/ggml/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jni
 )
 
-# Link dependencies
-target_link_libraries(llama-jni PRIVATE 
+target_link_libraries(aiope-inf PRIVATE
     llama
-    atomic  # Needed for some ARM64 operations
+    common
+    ggml
+    android
+    log
+    atomic
 )
 
-# Properties for Android JNI
-set_target_properties(llama-jni PROPERTIES
+# Vulkan linkage
+if(AIOPE_VULKAN)
+    find_library(VULKAN_LIB vulkan)
+    if(VULKAN_LIB)
+        target_link_libraries(aiope-inf PRIVATE ${VULKAN_LIB})
+        target_compile_definitions(aiope-inf PRIVATE AIOPE_VULKAN=1)
+    else()
+        message(WARNING "Vulkan library not found, falling back to CPU")
+    endif()
+endif()
+
+# Compiler definitions
+target_compile_definitions(aiope-inf PRIVATE
+    AIOPE_VERSION="1.0.0"
+    ANDROID_ARM_NEON=1
+)
+
+set_target_properties(aiope-inf PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
     POSITION_INDEPENDENT_CODE ON
-)
-
-# Add prebuilt directories for OpenBLAS if needed
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/libs/arm64-v8a")
-    add_library(openblas SHARED IMPORTED)
-    set_target_properties(openblas PROPERTIES
-        IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/libs/arm64-v8a/libopenblas.so"
-    )
-    target_link_libraries(llama-jni PUBLIC openblas)
-endif()
-
-# Copy built library to libs directory
-add_custom_command(TARGET llama-jni POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/libs/arm64-v8a
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:llama-jni> ${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/libs/arm64-v8a/
-    COMMENT "Copying llama-jni to Android libs directory"
+    OUTPUT_NAME "aiope-inf"
 )

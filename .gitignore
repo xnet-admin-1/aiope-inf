@@ -1,0 +1,30 @@
+# Build artifacts
+/build/
+/app/build/
+/build-arm64/
+
+# llama.cpp submodule build
+/app/src/main/cpp/llama.cpp/build/
+
+# IDE
+.idea/
+*.iml
+local.properties
+
+# Gradle
+.gradle/
+gradle-wrapper.jar
+
+# Native libs (built, not committed)
+/app/src/main/jniLibs/
+
+# Models (too large for git)
+*.gguf
+*.bin
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SSH keys
+.ssh/

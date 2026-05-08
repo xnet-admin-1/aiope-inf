@@ -1,216 +1,268 @@
 #include <jni.h>
 #include <android/log.h>
 #include <string>
+#include <vector>
+#include <mutex>
+#include <atomic>
+#include <thread>
+#include <functional>
+
 #include "llama.h"
 #include "common.h"
 
-#define LOG_TAG "LlamaJNI"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#define TAG "AIOPE-INF"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// Global model and context pointers
-static llama_model* g_model = nullptr;
-static llama_context* g_ctx = nullptr;
-static gpt_params g_params;
+// ============================================================
+// Global state
+// ============================================================
+static llama_model *g_model = nullptr;
+static llama_context *g_ctx = nullptr;
+static std::mutex g_mutex;
+static std::atomic<bool> g_abort{false};
 
-// Convert jstring to std::string
-static std::string jstring_to_string(JNIEnv* env, jstring jstr) {
+// GPU info
+static bool g_vulkan_available = false;
+static int g_gpu_layers = 0;
+
+// ============================================================
+// Helpers
+// ============================================================
+static std::string jstring_to_string(JNIEnv *env, jstring jstr) {
     if (!jstr) return "";
-    const char* chars = env->GetStringUTFChars(jstr, nullptr);
-    std::string str(chars);
+    const char *chars = env->GetStringUTFChars(jstr, nullptr);
+    std::string result(chars);
     env->ReleaseStringUTFChars(jstr, chars);
-    return str;
-}
-
-extern "C" {
-
-JNIEXPORT jint JNICALL
-Java_com_example_llama_LlamaJNI_initialize(
-        JNIEnv* env, jobject /* this */, jstring model_path) {
-    
-    LOGI("Initializing llama.cpp JNI");
-    
-    std::string model_path_str = jstring_to_string(env, model_path);
-    LOGI("Loading model from: %s", model_path_str.c_str());
-    
-    // Initialize parameters
-    g_params.model = model_path_str;
-    g_params.n_ctx = 2048;
-    g_params.n_threads = 4;
-    g_params.n_threads_batch = 4;
-    g_params.n_predict = 512;
-    g_params.temp = 0.7f;
-    g_params.top_k = 40;
-    g_params.top_p = 0.95f;
-    
-    // Initialize llama backend
-    llama_backend_init();
-    llama_numa_init(g_params.numa);
-    
-    // Load the model
-    LOGI("Loading model...");
-    g_model = llama_load_model_from_file(g_params.model.c_str(), g_params.model_params);
-    if (g_model == nullptr) {
-        LOGE("Failed to load model from %s", g_params.model.c_str());
-        return -1;
-    }
-    
-    LOGI("Model loaded successfully");
-    
-    // Create context
-    g_ctx = llama_new_context_with_model(g_model, g_params.ctx_params);
-    if (g_ctx == nullptr) {
-        LOGE("Failed to create context");
-        llama_free_model(g_model);
-        g_model = nullptr;
-        return -2;
-    }
-    
-    LOGI("Context created successfully");
-    
-    return 0; // Success
-}
-
-JNIEXPORT jstring JNICALL
-Java_com_example_llama_LlamaJNI_generateText(
-        JNIEnv* env, jobject /* this */, jstring prompt) {
-    
-    if (!g_model || !g_ctx) {
-        return env->NewStringUTF("Error: Model not initialized");
-    }
-    
-    std::string prompt_str = jstring_to_string(env, prompt);
-    LOGI("Generating text for prompt: %s", prompt_str.c_str());
-    
-    // Tokenize the prompt
-    std::vector<llama_token> tokens_list;
-    tokens_list = llama_tokenize(g_ctx, prompt_str, false);
-    
-    if (tokens_list.empty()) {
-        return env->NewStringUTF("Error: Failed to tokenize prompt");
-    }
-    
-    int n_ctx = llama_n_ctx(g_ctx);
-    int n_past = 0;
-    
-    // Evaluate prompt
-    if (llama_decode(g_ctx, llama_batch_get_one(tokens_list.data(), tokens_list.size(), n_past, 0))) {
-        LOGE("Failed to evaluate prompt");
-        return env->NewStringUTF("Error: Failed to evaluate prompt");
-    }
-    
-    n_past += tokens_list.size();
-    
-    // Generate response
-    std::string response;
-    for (int i = 0; i < g_params.n_predict; i++) {
-        // Sample next token
-        llama_token id = 0;
-        {
-            auto logits = llama_get_logits(g_ctx);
-            auto n_vocab = llama_n_vocab(g_model);
-            
-            std::vector<llama_token_data> candidates;
-            candidates.reserve(n_vocab);
-            for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-                candidates.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
-            }
-            
-            llama_token_data_array candidates_p = {candidates.data(), candidates.size(), false};
-            
-            // Apply sampling
-            llama_sample_top_k(g_ctx, candidates_p.data(), g_params.top_k, 1);
-            llama_sample_top_p(g_ctx, candidates_p.data(), g_params.top_p, 1);
-            llama_sample_temp(g_ctx, candidates_p.data(), g_params.temp);
-            
-            id = llama_sample_token(g_ctx, candidates_p.data());
-        }
-        
-        // Check for EOS
-        if (id == llama_token_eos(g_model) || n_past >= n_ctx) {
-            break;
-        }
-        
-        // Convert token to string
-        std::string token_str = llama_token_to_piece(g_ctx, id);
-        response += token_str;
-        
-        // Evaluate the token
-        if (llama_decode(g_ctx, llama_batch_get_one(&id, 1, n_past, 0))) {
-            LOGW("Failed to evaluate token");
-            break;
-        }
-        
-        n_past++;
-    }
-    
-    LOGI("Generation complete, response length: %zu", response.length());
-    return env->NewStringUTF(response.c_str());
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_llama_LlamaJNI_cleanup(
-        JNIEnv* /* env */, jobject /* this */) {
-    
-    LOGI("Cleaning up llama.cpp resources");
-    
-    if (g_ctx) {
-        llama_free(g_ctx);
-        g_ctx = nullptr;
-    }
-    
-    if (g_model) {
-        llama_free_model(g_model);
-        g_model = nullptr;
-    }
-    
-    llama_backend_free();
-}
-
-JNIEXPORT jint JNICALL
-Java_com_example_llama_LlamaJNI_getContextSize(
-        JNIEnv* /* env */, jobject /* this */) {
-    
-    if (!g_ctx) return 0;
-    return llama_n_ctx(g_ctx);
-}
-
-JNIEXPORT jfloatArray JNICALL
-Java_com_example_llama_LlamaJNI_getEmbedding(
-        JNIEnv* env, jobject /* this */, jstring text) {
-    
-    if (!g_model || !g_ctx) {
-        return nullptr;
-    }
-    
-    std::string text_str = jstring_to_string(env, text);
-    
-    // Tokenize
-    std::vector<llama_token> tokens = llama_tokenize(g_ctx, text_str, false);
-    if (tokens.empty()) {
-        return nullptr;
-    }
-    
-    // Get embedding dimension
-    int n_embd = llama_n_embd(g_model);
-    
-    // Create output array
-    jfloatArray result = env->NewFloatArray(n_embd);
-    if (!result) {
-        return nullptr;
-    }
-    
-    // Evaluate tokens
-    llama_decode(g_ctx, llama_batch_get_one(tokens.data(), tokens.size(), 0, 0));
-    
-    // Get embeddings (for simplicity, using last token's embedding)
-    const float* embeddings = llama_get_embeddings(g_ctx);
-    if (embeddings) {
-        env->SetFloatArrayRegion(result, 0, n_embd, embeddings);
-    }
-    
     return result;
 }
 
+static jstring string_to_jstring(JNIEnv *env, const std::string &str) {
+    return env->NewStringUTF(str.c_str());
+}
+
+// ============================================================
+// JNI: Model Loading
+// ============================================================
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_aiope_inf_LlamaJNI_loadModel(
+    JNIEnv *env, jobject /* this */,
+    jstring modelPath,
+    jint nGpuLayers,
+    jint contextSize,
+    jint batchSize,
+    jboolean useVulkan) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+
+    // Unload existing model
+    if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
+    if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+
+    std::string path = jstring_to_string(env, modelPath);
+    LOGI("Loading model: %s (gpu_layers=%d, ctx=%d, batch=%d, vulkan=%d)",
+         path.c_str(), nGpuLayers, contextSize, batchSize, useVulkan);
+
+    // Model params
+    llama_model_params model_params = llama_model_default_params();
+    model_params.n_gpu_layers = nGpuLayers;
+
+#ifdef AIOPE_VULKAN
+    if (useVulkan) {
+        LOGI("Vulkan GPU acceleration enabled");
+        g_vulkan_available = true;
+    }
+#endif
+
+    g_gpu_layers = nGpuLayers;
+
+    // Load model
+    g_model = llama_model_load_from_file(path.c_str(), model_params);
+    if (!g_model) {
+        LOGE("Failed to load model: %s", path.c_str());
+        return JNI_FALSE;
+    }
+
+    // Context params
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = contextSize > 0 ? contextSize : 2048;
+    ctx_params.n_batch = batchSize > 0 ? batchSize : 512;
+    ctx_params.n_threads = std::thread::hardware_concurrency();
+    ctx_params.n_threads_batch = std::thread::hardware_concurrency();
+
+    g_ctx = llama_init_from_model(g_model, ctx_params);
+    if (!g_ctx) {
+        LOGE("Failed to create context");
+        llama_model_free(g_model);
+        g_model = nullptr;
+        return JNI_FALSE;
+    }
+
+    LOGI("Model loaded successfully. Threads: %d", ctx_params.n_threads);
+    return JNI_TRUE;
+}
+
+// ============================================================
+// JNI: Unload Model
+// ============================================================
+extern "C" JNIEXPORT void JNICALL
+Java_com_aiope_inf_LlamaJNI_unloadModel(JNIEnv *env, jobject /* this */) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
+    if (g_model) { llama_model_free(g_model); g_model = nullptr; }
+    LOGI("Model unloaded");
+}
+
+// ============================================================
+// JNI: Generate (blocking, full response)
+// ============================================================
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_aiope_inf_LlamaJNI_generate(
+    JNIEnv *env, jobject /* this */,
+    jstring prompt,
+    jint maxTokens,
+    jfloat temperature,
+    jfloat topP,
+    jfloat repeatPenalty) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_abort.store(false);
+
+    if (!g_model || !g_ctx) {
+        LOGE("Model not loaded");
+        return string_to_jstring(env, "");
+    }
+
+    std::string prompt_str = jstring_to_string(env, prompt);
+    const llama_vocab *vocab = llama_model_get_vocab(g_model);
+
+    // Tokenize
+    std::vector<llama_token> tokens(prompt_str.size() + 128);
+    int n_tokens = llama_tokenize(vocab, prompt_str.c_str(), prompt_str.size(),
+                                  tokens.data(), tokens.size(), true, true);
+    if (n_tokens < 0) {
+        tokens.resize(-n_tokens);
+        n_tokens = llama_tokenize(vocab, prompt_str.c_str(), prompt_str.size(),
+                                  tokens.data(), tokens.size(), true, true);
+    }
+    tokens.resize(n_tokens);
+
+    // Clear KV cache
+    llama_kv_cache_clear(g_ctx);
+
+    // Decode prompt
+    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+    for (int i = 0; i < n_tokens; i++) {
+        llama_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
+    }
+
+    if (llama_decode(g_ctx, batch) != 0) {
+        LOGE("Failed to decode prompt");
+        llama_batch_free(batch);
+        return string_to_jstring(env, "");
+    }
+    llama_batch_free(batch);
+
+    // Sampling
+    std::string result;
+    int n_cur = n_tokens;
+    int n_max = maxTokens > 0 ? maxTokens : 512;
+
+    auto *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature > 0 ? temperature : 0.7f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(topP > 0 ? topP : 0.9f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_penalties(
+        64, repeatPenalty > 0 ? repeatPenalty : 1.1f, 0.0f, 0.0f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(0));
+
+    for (int i = 0; i < n_max; i++) {
+        if (g_abort.load()) break;
+
+        llama_token new_token = llama_sampler_sample(smpl, g_ctx, -1);
+
+        if (llama_vocab_is_eog(vocab, new_token)) break;
+
+        // Convert token to text
+        char buf[256];
+        int n = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+        if (n > 0) {
+            result.append(buf, n);
+        }
+
+        // Prepare next batch
+        llama_batch next_batch = llama_batch_init(1, 0, 1);
+        llama_batch_add(next_batch, new_token, n_cur, {0}, true);
+        n_cur++;
+
+        if (llama_decode(g_ctx, next_batch) != 0) {
+            LOGE("Decode failed at token %d", i);
+            llama_batch_free(next_batch);
+            break;
+        }
+        llama_batch_free(next_batch);
+    }
+
+    llama_sampler_free(smpl);
+    return string_to_jstring(env, result);
+}
+
+// ============================================================
+// JNI: Abort generation
+// ============================================================
+extern "C" JNIEXPORT void JNICALL
+Java_com_aiope_inf_LlamaJNI_abort(JNIEnv *env, jobject /* this */) {
+    g_abort.store(true);
+    LOGI("Generation aborted");
+}
+
+// ============================================================
+// JNI: Model info
+// ============================================================
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_aiope_inf_LlamaJNI_getModelInfo(JNIEnv *env, jobject /* this */) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!g_model) return string_to_jstring(env, "{}");
+
+    char desc[256];
+    llama_model_desc(g_model, desc, sizeof(desc));
+
+    std::string info = "{";
+    info += "\"description\":\"" + std::string(desc) + "\",";
+    info += "\"n_params\":" + std::to_string(llama_model_n_params(g_model)) + ",";
+    info += "\"size\":" + std::to_string(llama_model_size(g_model)) + ",";
+    info += "\"gpu_layers\":" + std::to_string(g_gpu_layers) + ",";
+    info += "\"vulkan\":" + std::string(g_vulkan_available ? "true" : "false");
+    info += "}";
+
+    return string_to_jstring(env, info);
+}
+
+// ============================================================
+// JNI: Check Vulkan support
+// ============================================================
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_aiope_inf_LlamaJNI_isVulkanAvailable(JNIEnv *env, jobject /* this */) {
+#ifdef AIOPE_VULKAN
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
+// ============================================================
+// JNI: Backend info
+// ============================================================
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_aiope_inf_LlamaJNI_getBackendInfo(JNIEnv *env, jobject /* this */) {
+    std::string info = "{";
+    info += "\"cpu_threads\":" + std::to_string(std::thread::hardware_concurrency()) + ",";
+#ifdef AIOPE_VULKAN
+    info += "\"vulkan\":true,";
+#else
+    info += "\"vulkan\":false,";
+#endif
+    info += "\"neon\":true";  // ARM64-v8a always has NEON
+    info += "}";
+    return string_to_jstring(env, info);
 }

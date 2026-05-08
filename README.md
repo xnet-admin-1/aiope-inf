@@ -1,155 +1,163 @@
-# AIOPE-INF (Inference Engine)
+# AIOPE-INF
 
-## Overview
-Android JNI project for serving GGUF models locally on ARM64-v8a Android devices with OpenAI-like API compatibility.
-
-## Project Structure
-```
-/aiope-inf/
-├── app/build.gradle.kts                    # ARM64-v8a Gradle build
-├── app/src/main/
-│   ├── java/com/aiope/inf/
-│   │   ├── LlamaJNI.kt                    # Kotlin native interface
-│   │   ├── MainActivity.kt                # UI implementation
-│   │   └── ModelManager.kt                # Model & API manager
-│   ├── jni/
-│   │   └── llama_jni.cpp                  # C++ JNI implementation
-│   └── cpp/
-│       ├── CMakeLists.txt                 # ARM64-v8a build config
-│       └── libs/arm64-v8a/                # Native library output
-└── gradle/                                 # Wrap configured for ARM64
-```
+On-device LLM inference engine for Android ARM64-v8a. Serves GGUF models locally with an OpenAI-compatible API.
 
 ## Features
 
-### **Core Capabilities**
-- ✅ **ARM64-v8a (armv8a) native inference** with NEON optimizations
-- ✅ **OpenAI API compatibility** (chat completions, embeddings)
-- ✅ **GGUF model support** via llama.cpp integration
-- ✅ **JNI bridge** for efficient C++ ↔ Kotlin communication
-- ✅ **Model caching** and lifecycle management
-- ✅ **Foreground service** for background inference
+- **Direct llama.cpp integration** — compiled as JNI shared library
+- **Vulkan GPU acceleration** — automatic layer offloading based on VRAM
+- **Streaming responses** — token-by-token via callbacks and SSE
+- **OpenAI API server** — `POST /v1/chat/completions` on localhost:8080
+- **On-device quantization** — Q2_K through Q8_0
+- **Foreground service** — keeps inference alive in background
 
-### **API Endpoints**
+## Architecture
+
 ```
-POST /v1/chat/completions
-POST /v1/embeddings
-GET  /v1/models
-POST /health
+┌─────────────────────────────────────────────┐
+│  Android App (Kotlin)                       │
+├─────────────────────────────────────────────┤
+│  OpenAIServer    │  ModelManager            │
+│  (HTTP :8080)    │  (lifecycle, streaming)  │
+├─────────────────────────────────────────────┤
+│  LlamaJNI (JNI bridge)                     │
+├─────────────────────────────────────────────┤
+│  libaiope-inf.so (C++17)                   │
+│  ├── llama_jni.cpp    (core inference)     │
+│  ├── streaming.cpp    (SSE + callbacks)    │
+│  ├── quantize.cpp     (on-device quant)    │
+│  └── gpu_backend.cpp  (Vulkan detection)   │
+├─────────────────────────────────────────────┤
+│  llama.cpp (submodule)                     │
+│  └── ggml (Vulkan/NEON compute)            │
+└─────────────────────────────────────────────┘
 ```
 
-## ARM64-v8a Technical Details
+## Quick Start
 
-### **Build Flags**
 ```bash
--DANDROID_ABI=arm64-v8a          # 64-bit ARMv8-A
--DANDROID_ARM_NEON=ON           # NEON SIMD instructions
--DANDROID_TOOLCHAIN=clang       # LLVM compiler
--DLLAMA_NATIVE=OFF              # Disable CPU-specific code
+# 1. Clone
+git clone git@github.com:xnet-admin-1/aiope-inf.git
+cd aiope-inf
+
+# 2. Setup (clones llama.cpp)
+chmod +x scripts/setup.sh
+./scripts/setup.sh
+
+# 3. Build
+./gradlew assembleDebug
+
+# 4. Install
+adb install app/build/outputs/apk/debug/app-debug.apk
+
+# 5. Push a GGUF model
+adb push model.Q4_K_M.gguf /data/data/com.aiope.inf/files/models/
 ```
 
-### **Performance Characteristics**
-- **NEON SIMD**: Efficient vector operations
-- **64-bit ABI**: Access to all CPU registers
-- **Advanced SIMD**: v8.0+ floating-point improvements
-- **Crypto extensions**: AES, SHA acceleration
+## OpenAI API Usage
 
-## Usage
+Once the server is running on-device:
 
-### **1. Build Requirements**
 ```bash
-# Native compilation chain
-Android NDK r25+ (for clang ARM64 support)
-CMake 3.22+ (for ARM64-v8a toolchain)
-llama.cpp source (cloned to app/src/main/cpp/)
+# Port forward
+adb forward tcp:8080 tcp:8080
+
+# Chat completion
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 256,
+    "temperature": 0.7,
+    "stream": false
+  }'
+
+# Streaming
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local",
+    "messages": [{"role": "user", "content": "Explain quantum computing"}],
+    "stream": true
+  }'
+
+# List models
+curl http://localhost:8080/v1/models
+
+# Health check
+curl http://localhost:8080/health
 ```
 
-### **2. Integration with GGUF Models**
+## Standalone NDK Build
+
+Build without Android Studio:
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk-r26b
+chmod +x scripts/build-arm64.sh
+./scripts/build-arm64.sh
+```
+
+## Quantization
+
+Quantize models on-device:
+
+| Type | Bits | Size Ratio | Quality |
+|------|------|-----------|---------|
+| Q2_K | 2 | ~15% | Lowest |
+| Q3_K_M | 3 | ~22% | Low |
+| Q4_K_M | 4 | ~28% | Good (recommended) |
+| Q5_K_M | 5 | ~35% | Very good |
+| Q6_K | 6 | ~40% | Excellent |
+| Q8_0 | 8 | ~50% | Near lossless |
+
+## GPU Acceleration
+
+Vulkan is auto-detected. GPU layer count is recommended based on available VRAM:
+
 ```kotlin
-// Load model
-val modelManager = ModelManager(context)
-val success = modelManager.loadModel("llama-2-7b.Q4_K_M.gguf")
-
-// Use OpenAI-like API
-val response = modelManager.chatCompletion(
-    listOf(
-        ChatMessage("user", "Explain quantum computing")
-    )
-)
+val manager = ModelManager(context)
+val gpuInfo = manager.getGpuInfo()
+// {"available":true,"device_name":"Adreno 740","vram_mb":2048,...}
 ```
 
-### **3. Model Directory Structure**
+## Requirements
+
+- Android 8.0+ (API 26)
+- ARM64-v8a device
+- 2GB+ RAM (4GB+ recommended for 7B models)
+- Vulkan 1.1+ for GPU acceleration (optional)
+
+## Project Structure
+
 ```
-Private app storage:
-  /data/data/com.aiope.inf/files/models/
-    ├── llama-2-7b.Q4_K_M.gguf
-    ├── mistral-7b.Q4_0.gguf
-    └── phi-2.Q4_K_S.gguf
-```
-
-## Build Instructions
-
-### **For Development (Android Studio)**
-1. Import `/data/aiope-inf/`
-2. Install NDK (arm64-v8a)
-3. Clone llama.cpp to `app/src/main/cpp/`
-4. Build → Make Project
-
-### **For CI/CD Pipeline**
-```bash
-# GitHub Actions example
-- uses: actions/checkout@v4
-- uses: android-actions/setup-android@v3
-  with:
-    ndk-version: '25.2'
-
-- name: Build ARM64 APK
-  run: ./gradlew assembleDebug
-```
-
-## Technical Specifications
-
-### **Supported Architecture**
-- **Primary**: arm64-v8a (ARMv8-A 64-bit)
-- **CPU extensions**: NEON, FPU, Advanced SIMD
-- **Memory**: Minimum 2GB RAM (4GB recommended)
-
-### **Model Compatibility**
-| Model Size | Recommended Quantization |
-|------------|-------------------------|
-| 7B params | Q4_K_M / Q4_0 |
-| 13B params | Q4_K_S |
-| 34B+ params | Q3_K_S (requires 6GB+ RAM) |
-
-### **Performance Benchmarks**
-```
-Model: Llama-2-7B-Q4_K_M (ARM64-v8a)
-Device: Google Pixel 8 (Tensor G3)
-Threads: 4
-NEON: Enabled
-
-Inference: ~12 tokens/sec
-Memory usage: ~4.2GB RAM
+aiope-inf/
+├── app/src/main/
+│   ├── java/com/aiope/inf/
+│   │   ├── LlamaJNI.kt          # JNI interface
+│   │   ├── ModelManager.kt      # High-level API
+│   │   ├── OpenAIServer.kt      # HTTP server
+│   │   ├── InferenceService.kt  # Foreground service
+│   │   └── MainActivity.kt      # UI
+│   ├── jni/
+│   │   ├── llama_jni.cpp        # Core JNI (load, generate, abort)
+│   │   ├── streaming.cpp        # Streaming + SSE generation
+│   │   ├── quantize.cpp         # On-device quantization
+│   │   └── gpu_backend.cpp      # Vulkan detection & management
+│   ├── cpp/
+│   │   ├── CMakeLists.txt       # Native build config
+│   │   └── llama.cpp/           # Submodule
+│   └── res/layout/
+│       └── activity_main.xml
+├── scripts/
+│   ├── setup.sh                 # Project setup
+│   └── build-arm64.sh           # Standalone NDK build
+├── build.gradle.kts
+├── settings.gradle.kts
+└── app/build.gradle.kts
 ```
 
-## Deployment
+## License
 
-### **Release APK Structure**
-```bash
-aiope-inf-debug.apk/
-├── lib/arm64-v8a/
-│   └── libllama-jni.so    # JNI library
-├── assets/models/         # Optional bundled models
-└── res/                   # Android resources
-```
-
-## Directory Reorganization
-Package changed from `com.example.llama` → `com.aiope.inf` for consistency with AIOPE ecosystem.
-
-## Next Steps
-1. **Integrate llama.cpp source directly**
-2. **Add GPU acceleration (Vulkan/Metal)**
-3. **Implement streaming responses**
-4. **Add model quantization tools**
-
-**Project ready for Android ARM64-v8a development with GGUF model support.**
+MIT

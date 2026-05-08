@@ -1,48 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+    package="com.aiope.inf">
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-    
-    <!-- For GPU acceleration if using Vulkan -->
-    <uses-feature android:name="android.hardware.vulkan" android:required="false" />
-    <uses-feature android:name="android.hardware.vulkan.level" android:required="false" />
-    <uses-feature android:name="android.hardware.vulkan.version" android:required="false" />
-    
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Vulkan GPU feature -->
+    <uses-feature
+        android:name="android.hardware.vulkan.level"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.vulkan.version"
+        android:version="0x00401000"
+        android:required="false" />
+
     <application
         android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="@xml/backup_rules"
-        android:icon="@mipmap/ic_launcher"
-        android:label="@string/app_name"
+        android:label="AIOPE Inference"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Llama"
-        android:requestLegacyExternalStorage="true"
-        tools:targetApi="31">
-        
+        android:theme="@style/Theme.AppCompat.DayNight.DarkActionBar"
+        android:largeHeap="true"
+        android:extractNativeLibs="true">
+
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:configChanges="orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        
-        <!-- Service for local HTTP server (if implementing) -->
-        <service
-            android:name=".LlamaServerService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse" />
-            
-        <!-- Model download service -->
-        <service
-            android:name=".ModelDownloadService"
-            android:exported="false" />
-            
-    </application>
 
+        <service
+            android:name=".InferenceService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false" />
+
+    </application>
 </manifest>
