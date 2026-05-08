@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <!-- Model Loading Section -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="GGUF Model Loader"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:paddingBottom="16dp"/>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Load GGUF model for local inference"
+                android:gravity="center"
+                android:paddingBottom="32dp"/>
+
+            <!-- Model Status -->
+            <TextView
+                android:id="@+id/tvModelStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Model: Not Loaded"
+                android:textSize="16sp"
+                android:gravity="center"
+                android:padding="8dp"
+                android:background="#f0f0f0"/>
+
+            <!-- Input Prompt -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Prompt:"
+                android:textSize="18sp"
+                android:paddingTop="16dp"
+                android:paddingBottom="8dp"/>
+
+            <EditText
+                android:id="@+id/etPrompt"
+                android:layout_width="match_parent"
+                android:layout_height="120dp"
+                android:hint="Enter your prompt here..."
+                android:inputType="textMultiLine"
+                android:gravity="top|start"
+                android:padding="12dp"
+                android:background="@android:drawable/editbox_background"/>
+
+            <!-- Buttons -->
+            <Button
+                android:id="@+id/btnLoadModel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Load Model"
+                android:layout_marginTop="16dp"
+                android:padding="12dp"/>
+
+            <Button
+                android:id="@+id/btnGenerate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Generate"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:padding="12dp"/>
+
+            <Button
+                android:id="@+id/btnChatAPI"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Test OpenAI API"
+                android:layout_marginTop="8dp"
+                android:enabled="false"
+                android:padding="12dp"/>
+
+            <!-- Response -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Response:"
+                android:textSize="18sp"
+                android:paddingTop="32dp"
+                android:paddingBottom="8dp"/>
+
+            <TextView
+                android:id="@+id/tvResponse"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="200dp"
+                android:padding="16dp"
+                android:background="#f8f8f8"
+                android:text="Response will appear here..."
+                android:textIsSelectable="true"/>
+
+            <!-- Progress -->
+            <ProgressBar
+                android:id="@+id/progressBar"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:visibility="gone"/>
+
+            <!-- Error Messages -->
+            <TextView
+                android:id="@+id/tvError"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="#ff0000"
+                android:padding="8dp"
+                android:visibility="gone"/>
+
+        </LinearLayout>
+    </ScrollView>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
