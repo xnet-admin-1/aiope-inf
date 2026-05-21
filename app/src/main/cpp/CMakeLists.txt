@@ -27,6 +27,7 @@ endif()
 set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
 set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
 set(LLAMA_NATIVE OFF CACHE BOOL "" FORCE)
 set(LLAMA_MPI OFF CACHE BOOL "" FORCE)
@@ -39,8 +40,8 @@ set(LLAMA_KOMPUTE OFF CACHE BOOL "" FORCE)
 
 # Vulkan GPU acceleration
 if(AIOPE_VULKAN)
-    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
-    message(STATUS "AIOPE-INF: Vulkan GPU acceleration ENABLED")
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+    message(STATUS "AIOPE-INF: Vulkan via system lib (not ggml-vulkan)")
 else()
     set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
     message(STATUS "AIOPE-INF: CPU-only mode")
@@ -57,19 +58,42 @@ add_library(aiope-inf SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/../jni/streaming.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../jni/quantize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../jni/gpu_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../jni/multimodal.cpp
 )
+
+# Build mtmd (multimodal) library - full: vision + audio
+file(GLOB MTMD_MODEL_SOURCES ${LLAMA_DIR}/tools/mtmd/models/*.cpp)
+set(MTMD_SOURCES
+    ${LLAMA_DIR}/tools/mtmd/clip.cpp
+    ${LLAMA_DIR}/tools/mtmd/mtmd.cpp
+    ${LLAMA_DIR}/tools/mtmd/mtmd-audio.cpp
+    ${LLAMA_DIR}/tools/mtmd/mtmd-helper.cpp
+    ${LLAMA_DIR}/tools/mtmd/mtmd-image.cpp
+    ${MTMD_MODEL_SOURCES}
+)
+add_library(mtmd STATIC ${MTMD_SOURCES})
+target_include_directories(mtmd PRIVATE
+    ${LLAMA_DIR}/include
+    ${LLAMA_DIR}/ggml/include
+    ${LLAMA_DIR}/tools/mtmd
+    ${LLAMA_DIR}/common
+    ${LLAMA_DIR}/vendor
+)
+target_link_libraries(mtmd PRIVATE llama ggml)
 
 target_include_directories(aiope-inf PRIVATE
     ${LLAMA_DIR}/include
     ${LLAMA_DIR}/common
     ${LLAMA_DIR}/ggml/include
+    ${LLAMA_DIR}/tools/mtmd
     ${CMAKE_CURRENT_SOURCE_DIR}/../jni
 )
 
 target_link_libraries(aiope-inf PRIVATE
     llama
-    common
+    llama-common
     ggml
+    mtmd
     android
     log
     atomic

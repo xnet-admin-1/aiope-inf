@@ -123,6 +123,31 @@ class ModelManager(private val context: Context) {
     fun abort() = jni.abort()
 
     // ============================================================
+    // LoRA adapters
+    // ============================================================
+
+    suspend fun loadLoraAdapter(path: String, scale: Float = 1.0f): Boolean {
+        return withContext(Dispatchers.IO) {
+            jni.loadLoraAdapter(path, scale)
+        }
+    }
+
+    fun unloadLoraAdapter() = jni.unloadLoraAdapter()
+
+    // ============================================================
+    // Chat template (auto-detect from model)
+    // ============================================================
+
+    fun applyChatTemplate(messages: List<Pair<String, String>>): String {
+        val json = JSONArray().apply {
+            messages.forEach { (role, content) ->
+                put(JSONObject().put("role", role).put("content", content))
+            }
+        }
+        return jni.applyChatTemplate(json.toString())
+    }
+
+    // ============================================================
     // Model files
     // ============================================================
 

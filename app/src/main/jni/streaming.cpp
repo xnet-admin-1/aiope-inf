@@ -79,12 +79,12 @@ Java_com_aiope_inf_LlamaJNI_generateStreaming(
     tokens.resize(n_tokens);
 
     // Clear KV cache
-    llama_kv_cache_clear(g_ctx);
+    llama_memory_clear(llama_get_memory(g_ctx), true);
 
     // Decode prompt
     llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
     for (int i = 0; i < n_tokens; i++) {
-        llama_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
+        common_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
     }
 
     if (llama_decode(g_ctx, batch) != 0) {
@@ -137,7 +137,7 @@ Java_com_aiope_inf_LlamaJNI_generateStreaming(
 
         // Next token
         llama_batch next_batch = llama_batch_init(1, 0, 1);
-        llama_batch_add(next_batch, new_token, n_cur, {0}, true);
+        common_batch_add(next_batch, new_token, n_cur, {0}, true);
         n_cur++;
 
         if (llama_decode(g_ctx, next_batch) != 0) {
@@ -201,12 +201,12 @@ Java_com_aiope_inf_LlamaJNI_generateSSE(
     }
     tokens.resize(n_tokens);
 
-    llama_kv_cache_clear(g_ctx);
+    llama_memory_clear(llama_get_memory(g_ctx), true);
 
     // Decode prompt
     llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
     for (int i = 0; i < n_tokens; i++) {
-        llama_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
+        common_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
     }
     if (llama_decode(g_ctx, batch) != 0) {
         llama_batch_free(batch);
@@ -276,7 +276,7 @@ Java_com_aiope_inf_LlamaJNI_generateSSE(
 
         // Next token
         llama_batch next_batch = llama_batch_init(1, 0, 1);
-        llama_batch_add(next_batch, new_token, n_cur, {0}, true);
+        common_batch_add(next_batch, new_token, n_cur, {0}, true);
         n_cur++;
         if (llama_decode(g_ctx, next_batch) != 0) {
             llama_batch_free(next_batch);

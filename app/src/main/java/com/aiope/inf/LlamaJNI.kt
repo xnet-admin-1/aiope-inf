@@ -61,6 +61,32 @@ class LlamaJNI {
     ): String
 
     // ============================================================
+    // Multimodal (image/audio)
+    // ============================================================
+    external fun initMultimodal(mmProjPath: String): Boolean
+    external fun generateWithImage(
+        prompt: String,
+        imageData: ByteArray,
+        width: Int,
+        height: Int,
+        maxTokens: Int = 512,
+        temperature: Float = 0.7f,
+        topP: Float = 0.9f
+    ): String
+    external fun freeMultimodal()
+
+    // ============================================================
+    // LoRA adapters
+    // ============================================================
+    external fun loadLoraAdapter(loraPath: String, scale: Float = 1.0f): Boolean
+    external fun unloadLoraAdapter()
+
+    // ============================================================
+    // Chat template
+    // ============================================================
+    external fun applyChatTemplate(messagesJson: String): String
+
+    // ============================================================
     // Quantization
     // ============================================================
     external fun quantizeModel(

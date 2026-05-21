@@ -28,3 +28,6 @@ Thumbs.db
 
 # SSH keys
 .ssh/
+app/.cxx/
+app/build/
+local.properties

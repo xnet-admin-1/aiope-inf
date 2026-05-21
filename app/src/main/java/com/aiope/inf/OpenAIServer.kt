@@ -1,6 +1,7 @@
 package com.aiope.inf
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
@@ -57,12 +58,67 @@ class OpenAIServer(private val modelManager: ModelManager) {
             try {
                 val request = parseRequest(input)
                 val response = routeRequest(request)
-                writeResponse(output, response)
+
+                if (response.isStreaming && response.streamData == "__LIVE_STREAM__") {
+                    // True SSE: write headers then stream tokens directly
+                    writeSseHeaders(output)
+                    streamTokensToSocket(output, response)
+                } else {
+                    writeResponse(output, response)
+                }
             } catch (e: Exception) {
                 val error = errorResponse(500, e.message ?: "Internal error")
                 writeResponse(output, error)
             }
         }
+    }
+
+    private fun writeSseHeaders(output: OutputStream) {
+        val writer = PrintWriter(BufferedWriter(OutputStreamWriter(output)))
+        writer.print("HTTP/1.1 200 OK\r\n")
+        writer.print("Content-Type: text/event-stream\r\n")
+        writer.print("Cache-Control: no-cache\r\n")
+        writer.print("Connection: keep-alive\r\n")
+        writer.print("Access-Control-Allow-Origin: *\r\n")
+        writer.print("Transfer-Encoding: chunked\r\n")
+        writer.print("\r\n")
+        writer.flush()
+    }
+
+    private suspend fun streamTokensToSocket(output: OutputStream, response: HttpResponse) {
+        val completionId = "chatcmpl-${java.util.UUID.randomUUID().toString().take(8)}"
+        val model = response.streamModel
+
+        modelManager.generateStream(
+            response.streamPrompt,
+            ModelManager.GenerateParams(
+                maxTokens = response.streamMaxTokens,
+                temperature = response.streamTemperature,
+                topP = response.streamTopP
+            )
+        ).collect { token ->
+            val escaped = token.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r")
+            val chunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"content":"$escaped"},"finish_reason":null}]}"""
+            writeChunk(output, chunk + "\n\n")
+        }
+
+        // Final messages
+        val done = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"""
+        writeChunk(output, done + "\n\n")
+        writeChunk(output, "data: [DONE]\n\n")
+        // End chunked encoding
+        output.write("0\r\n\r\n".toByteArray())
+        output.flush()
+    }
+
+    private fun writeChunk(output: OutputStream, data: String) {
+        val bytes = data.toByteArray(Charsets.UTF_8)
+        val header = "${Integer.toHexString(bytes.size)}\r\n"
+        output.write(header.toByteArray())
+        output.write(bytes)
+        output.write("\r\n".toByteArray())
+        output.flush()
     }
 
     // ============================================================
@@ -82,7 +138,12 @@ class OpenAIServer(private val modelManager: ModelManager) {
         val contentType: String,
         val body: String,
         val isStreaming: Boolean = false,
-        val streamData: String = ""
+        val streamData: String = "",
+        val streamPrompt: String = "",
+        val streamModel: String = "",
+        val streamMaxTokens: Int = 512,
+        val streamTemperature: Float = 0.7f,
+        val streamTopP: Float = 0.9f
     )
 
     private fun parseRequest(reader: BufferedReader): HttpRequest {
@@ -189,6 +250,16 @@ class OpenAIServer(private val modelManager: ModelManager) {
     }
 
     private fun buildChatPrompt(messages: JSONArray): String {
+        // Use model's native chat template (supports Gemma, ChatML, Llama, etc.)
+        val msgList = mutableListOf<Pair<String, String>>()
+        for (i in 0 until messages.length()) {
+            val msg = messages.getJSONObject(i)
+            msgList.add(msg.getString("role") to msg.getString("content"))
+        }
+        val templated = modelManager.applyChatTemplate(msgList)
+        if (templated.isNotEmpty()) return templated
+
+        // Fallback: ChatML format
         val sb = StringBuilder()
         for (i in 0 until messages.length()) {
             val msg = messages.getJSONObject(i)
@@ -244,15 +315,19 @@ class OpenAIServer(private val modelManager: ModelManager) {
         temperature: Float,
         topP: Float
     ): HttpResponse {
-        val jni = LlamaJNI()
-        val sseData = jni.generateSSE(prompt, model, maxTokens, temperature, topP, null)
+        // Return a special marker — actual streaming handled in handleClient
         return HttpResponse(
             status = 200,
             statusText = "OK",
             contentType = "text/event-stream",
             body = "",
             isStreaming = true,
-            streamData = sseData
+            streamData = "__LIVE_STREAM__",
+            streamPrompt = prompt,
+            streamModel = model,
+            streamMaxTokens = maxTokens,
+            streamTemperature = temperature,
+            streamTopP = topP
         )
     }
 
