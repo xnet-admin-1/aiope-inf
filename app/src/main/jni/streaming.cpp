@@ -6,6 +6,8 @@
 #include <atomic>
 #include <functional>
 #include <thread>
+#include <algorithm>
+#include <chrono>
 
 #include "llama.h"
 #include "common.h"
@@ -81,18 +83,32 @@ Java_com_aiope_inf_LlamaJNI_generateStreaming(
     // Clear KV cache
     llama_memory_clear(llama_get_memory(g_ctx), true);
 
-    // Decode prompt
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-    for (int i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
+    LOGI("Prompt: %d tokens, decoding...", n_tokens);
+    auto t0 = std::chrono::high_resolution_clock::now();
+
+    // Decode prompt in batches
+    int batch_size = 512;
+    for (int i = 0; i < n_tokens; i += batch_size) {
+        if (g_abort.load()) {
+            env->CallVoidMethod(callback, onError, env->NewStringUTF("Aborted during prompt eval"));
+            return;
+        }
+        int n_batch = std::min(batch_size, n_tokens - i);
+        llama_batch batch = llama_batch_init(n_batch, 0, 1);
+        for (int j = 0; j < n_batch; j++) {
+            common_batch_add(batch, tokens[i + j], i + j, {0}, (i + j == n_tokens - 1));
+        }
+        if (llama_decode(g_ctx, batch) != 0) {
+            llama_batch_free(batch);
+            env->CallVoidMethod(callback, onError, env->NewStringUTF("Prompt decode failed"));
+            return;
+        }
+        llama_batch_free(batch);
     }
 
-    if (llama_decode(g_ctx, batch) != 0) {
-        llama_batch_free(batch);
-        env->CallVoidMethod(callback, onError, env->NewStringUTF("Prompt decode failed"));
-        return;
-    }
-    llama_batch_free(batch);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    auto pp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+    LOGI("Prompt eval: %d tokens in %lld ms (%.1f tok/s)", n_tokens, (long long)pp_ms, n_tokens * 1000.0 / pp_ms);
 
     // Sampling setup
     auto *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
@@ -114,6 +130,10 @@ Java_com_aiope_inf_LlamaJNI_generateStreaming(
         }
 
         llama_token new_token = llama_sampler_sample(smpl, g_ctx, -1);
+        llama_sampler_accept(smpl, new_token);
+
+        // Guard: if first token is EOS, skip it
+        if (i == 0 && llama_vocab_is_eog(vocab, new_token)) continue;
 
         if (llama_vocab_is_eog(vocab, new_token)) break;
 
@@ -203,16 +223,23 @@ Java_com_aiope_inf_LlamaJNI_generateSSE(
 
     llama_memory_clear(llama_get_memory(g_ctx), true);
 
-    // Decode prompt
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-    for (int i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
-    }
-    if (llama_decode(g_ctx, batch) != 0) {
+    // Decode prompt in batches
+    int batch_size = 512;
+    for (int i = 0; i < n_tokens; i += batch_size) {
+        if (g_abort.load()) {
+            return env->NewStringUTF("{\"error\":\"aborted\"}");
+        }
+        int n_batch = std::min(batch_size, n_tokens - i);
+        llama_batch batch = llama_batch_init(n_batch, 0, 1);
+        for (int j = 0; j < n_batch; j++) {
+            common_batch_add(batch, tokens[i + j], i + j, {0}, (i + j == n_tokens - 1));
+        }
+        if (llama_decode(g_ctx, batch) != 0) {
+            llama_batch_free(batch);
+            return env->NewStringUTF("{\"error\":\"prompt decode failed\"}");
+        }
         llama_batch_free(batch);
-        return env->NewStringUTF("{\"error\":\"prompt decode failed\"}");
     }
-    llama_batch_free(batch);
 
     // Sampling
     auto *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
@@ -237,6 +264,9 @@ Java_com_aiope_inf_LlamaJNI_generateSSE(
         if (g_abort.load()) break;
 
         llama_token new_token = llama_sampler_sample(smpl, g_ctx, -1);
+        llama_sampler_accept(smpl, new_token);
+
+        if (i == 0 && llama_vocab_is_eog(vocab, new_token)) continue;
         if (llama_vocab_is_eog(vocab, new_token)) break;
 
         char buf[256];

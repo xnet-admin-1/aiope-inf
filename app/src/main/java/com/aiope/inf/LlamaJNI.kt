@@ -73,6 +73,15 @@ class LlamaJNI {
         temperature: Float = 0.7f,
         topP: Float = 0.9f
     ): String
+
+    external fun generateWithAudio(
+        prompt: String,
+        audioSamples: FloatArray,
+        maxTokens: Int = 512,
+        temperature: Float = 0.1f,
+        topP: Float = 0.9f
+    ): String
+
     external fun freeMultimodal()
 
     // ============================================================
@@ -84,7 +93,7 @@ class LlamaJNI {
     // ============================================================
     // Chat template
     // ============================================================
-    external fun applyChatTemplate(messagesJson: String): String
+    external fun applyChatTemplate(messagesJson: String, toolsJson: String? = null): String
 
     // ============================================================
     // Quantization

@@ -130,10 +130,14 @@ Java_com_aiope_inf_LlamaJNI_getGpuInfo(JNIEnv *env, jobject /* this */) {
     json += "\"available\":" + std::string(g_gpu_info.vulkan_available ? "true" : "false") + ",";
     json += "\"backend\":\"vulkan\",";
     json += "\"device_name\":\"" + g_gpu_info.device_name + "\",";
+#ifdef AIOPE_VULKAN
     json += "\"api_version\":\"" +
         std::to_string(VK_VERSION_MAJOR(g_gpu_info.api_version)) + "." +
         std::to_string(VK_VERSION_MINOR(g_gpu_info.api_version)) + "." +
         std::to_string(VK_VERSION_PATCH(g_gpu_info.api_version)) + "\",";
+#else
+    json += "\"api_version\":\"0.0.0\",";
+#endif
     json += "\"vram_mb\":" + std::to_string(g_gpu_info.vram_size / (1024 * 1024)) + ",";
     json += "\"compute_units\":" + std::to_string(g_gpu_info.max_compute_units);
     json += "}";
@@ -153,9 +157,11 @@ Java_com_aiope_inf_LlamaJNI_recommendGpuLayers(
         return 0;  // No GPU, use CPU only
     }
 
-    // Reserve 256MB for overhead
-    uint64_t usable_vram = g_gpu_info.vram_size > (256 * 1024 * 1024)
-        ? g_gpu_info.vram_size - (256 * 1024 * 1024)
+    // On mobile, reported VRAM is shared system RAM. Be very conservative:
+    // Reserve 512MB for system + KV cache + overhead, and only use 50% of remainder
+    uint64_t reserved = 512ULL * 1024 * 1024;
+    uint64_t usable_vram = g_gpu_info.vram_size > reserved
+        ? (g_gpu_info.vram_size - reserved) / 2
         : 0;
 
     if (usable_vram == 0) return 0;
@@ -166,8 +172,9 @@ Java_com_aiope_inf_LlamaJNI_recommendGpuLayers(
     // How many layers fit in VRAM
     int gpu_layers = (int)(usable_vram / bytes_per_layer);
 
-    // Clamp to total layers
-    if (gpu_layers > totalLayers) gpu_layers = totalLayers;
+    // Cap at 60% of layers max to leave headroom
+    int max_layers = (totalLayers * 60) / 100;
+    if (gpu_layers > max_layers) gpu_layers = max_layers;
 
     LOGI("Recommended GPU layers: %d/%d (VRAM: %llu MB, model: %lld MB)",
          gpu_layers, totalLayers,

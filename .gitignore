@@ -31,3 +31,4 @@ Thumbs.db
 app/.cxx/
 app/build/
 local.properties
+*.safetensors

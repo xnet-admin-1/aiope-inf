@@ -12,7 +12,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -ffast-math -fno-finite-math-only")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -ffast-math -fno-finite-math-only")
 
 # Option: GPU acceleration via Vulkan
-option(AIOPE_VULKAN "Enable Vulkan GPU acceleration" ON)
+option(AIOPE_VULKAN "Enable Vulkan GPU acceleration" OFF)
 
 # ============================================================
 # llama.cpp integration (submodule at app/src/main/cpp/llama.cpp)
@@ -38,10 +38,27 @@ set(LLAMA_HIPBLAS OFF CACHE BOOL "" FORCE)
 set(LLAMA_SYCL OFF CACHE BOOL "" FORCE)
 set(LLAMA_KOMPUTE OFF CACHE BOOL "" FORCE)
 
-# Vulkan GPU acceleration
+# Vulkan GPU acceleration with prebuilt shaders
 if(AIOPE_VULKAN)
-    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
-    message(STATUS "AIOPE-INF: Vulkan via system lib (not ggml-vulkan)")
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)  # We build it ourselves
+    add_compile_definitions(GGML_USE_VULKAN=1)  # Global so backend-reg.cpp sees it
+    message(STATUS "AIOPE-INF: Vulkan GPU with prebuilt shaders")
+
+    set(VK_SHADERS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders-prebuilt")
+    file(GLOB VK_SHADER_CPPS "${VK_SHADERS_DIR}/*.comp.cpp")
+
+    add_library(ggml-vulkan STATIC
+        ${LLAMA_DIR}/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+        ${VK_SHADER_CPPS}
+    )
+    target_include_directories(ggml-vulkan PRIVATE
+        ${LLAMA_DIR}/ggml/include
+        ${LLAMA_DIR}/ggml/src
+        ${LLAMA_DIR}/ggml/src/ggml-vulkan
+        ${VK_SHADERS_DIR}
+    )
+    target_compile_definitions(ggml-vulkan PRIVATE GGML_USE_VULKAN=1)
+    target_link_libraries(ggml-vulkan PRIVATE ggml-base)
 else()
     set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
     message(STATUS "AIOPE-INF: CPU-only mode")
@@ -101,13 +118,10 @@ target_link_libraries(aiope-inf PRIVATE
 
 # Vulkan linkage
 if(AIOPE_VULKAN)
-    find_library(VULKAN_LIB vulkan)
-    if(VULKAN_LIB)
-        target_link_libraries(aiope-inf PRIVATE ${VULKAN_LIB})
-        target_compile_definitions(aiope-inf PRIVATE AIOPE_VULKAN=1)
-    else()
-        message(WARNING "Vulkan library not found, falling back to CPU")
-    endif()
+    set(VK_LIB "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/30/libvulkan.so")
+    target_link_libraries(aiope-inf PRIVATE -Wl,--whole-archive ggml-vulkan -Wl,--no-whole-archive ${VK_LIB})
+    target_link_libraries(ggml PRIVATE ggml-vulkan ${VK_LIB})
+    target_compile_definitions(aiope-inf PRIVATE AIOPE_VULKAN=1)
 endif()
 
 # Compiler definitions

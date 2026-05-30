@@ -6,9 +6,13 @@
 #include <atomic>
 #include <thread>
 #include <functional>
+#include <algorithm>
+#include <cstdio>
 
 #include "llama.h"
 #include "common.h"
+#include "chat.h"
+#include "nlohmann/json.hpp"
 
 #define TAG "AIOPE-INF"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -68,6 +72,7 @@ Java_com_aiope_inf_LlamaJNI_loadModel(
     // Model params
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = nGpuLayers;
+    model_params.use_mmap = true;  // Memory-map to avoid loading entire model into RAM
 
 #ifdef AIOPE_VULKAN
     if (useVulkan) {
@@ -87,10 +92,60 @@ Java_com_aiope_inf_LlamaJNI_loadModel(
 
     // Context params
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = contextSize > 0 ? contextSize : 2048;
+    ctx_params.n_ctx = contextSize > 0 ? contextSize : 4096;
     ctx_params.n_batch = batchSize > 0 ? batchSize : 512;
-    ctx_params.n_threads = std::thread::hardware_concurrency();
-    ctx_params.n_threads_batch = std::thread::hardware_concurrency();
+    ctx_params.n_ubatch = 256; // smaller micro-batches reduce memory pressure
+
+    // big.LITTLE-aware thread scheduling
+    // Read CPU topology to find performance cores
+    int n_cores = std::thread::hardware_concurrency();
+    int perf_cores = 0;
+    long max_freq = 0;
+    for (int i = 0; i < n_cores; i++) {
+        char path_buf[128];
+        snprintf(path_buf, sizeof(path_buf),
+            "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+        FILE *f = fopen(path_buf, "r");
+        if (f) {
+            long freq = 0;
+            fscanf(f, "%ld", &freq);
+            fclose(f);
+            if (freq > max_freq) max_freq = freq;
+        }
+    }
+    // Count cores within 80% of max frequency as "performance" cores
+    for (int i = 0; i < n_cores; i++) {
+        char path_buf[128];
+        snprintf(path_buf, sizeof(path_buf),
+            "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
+        FILE *f = fopen(path_buf, "r");
+        if (f) {
+            long freq = 0;
+            fscanf(f, "%ld", &freq);
+            fclose(f);
+            if (freq >= max_freq * 80 / 100) perf_cores++;
+        }
+    }
+    if (perf_cores == 0) perf_cores = std::max(1, n_cores / 2);
+
+    // Check thermal state — throttle if hot
+    int thermal_temp = 0;
+    FILE *tf = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+    if (tf) { fscanf(tf, "%d", &thermal_temp); fclose(tf); }
+    // thermal_temp is in millidegrees on most devices
+    if (thermal_temp > 1000) thermal_temp /= 1000; // normalize to celsius
+
+    int gen_threads = perf_cores;
+    if (thermal_temp > 75) gen_threads = std::max(2, perf_cores / 2); // HOT: halve
+    if (thermal_temp > 85) gen_threads = 2; // CRITICAL: minimum
+
+    ctx_params.n_threads = gen_threads;
+    ctx_params.n_threads_batch = n_cores; // batch uses ALL cores for fast prompt eval
+
+    LOGI("Creating context: ctx=%d, batch=%d, threads=%d (perf_cores=%d, thermal=%d°C)",
+         ctx_params.n_ctx, ctx_params.n_batch, ctx_params.n_threads, perf_cores, thermal_temp);
+
+    ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
 
     g_ctx = llama_init_from_model(g_model, ctx_params);
     if (!g_ctx) {
@@ -153,18 +208,24 @@ Java_com_aiope_inf_LlamaJNI_generate(
     // Clear KV cache
     llama_memory_clear(llama_get_memory(g_ctx), true);
 
-    // Decode prompt
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-    for (int i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, {0}, (i == n_tokens - 1));
-    }
-
-    if (llama_decode(g_ctx, batch) != 0) {
-        LOGE("Failed to decode prompt");
+    // Decode prompt in batches to avoid memory spike
+    int batch_size = 512;
+    for (int i = 0; i < n_tokens; i += batch_size) {
+        if (g_abort.load()) {
+            return string_to_jstring(env, "");
+        }
+        int n_batch = std::min(batch_size, n_tokens - i);
+        llama_batch batch = llama_batch_init(n_batch, 0, 1);
+        for (int j = 0; j < n_batch; j++) {
+            common_batch_add(batch, tokens[i + j], i + j, {0}, (i + j == n_tokens - 1));
+        }
+        if (llama_decode(g_ctx, batch) != 0) {
+            LOGE("Failed to decode prompt at pos %d", i);
+            llama_batch_free(batch);
+            return string_to_jstring(env, "");
+        }
         llama_batch_free(batch);
-        return string_to_jstring(env, "");
     }
-    llama_batch_free(batch);
 
     // Sampling
     std::string result;
@@ -182,6 +243,10 @@ Java_com_aiope_inf_LlamaJNI_generate(
         if (g_abort.load()) break;
 
         llama_token new_token = llama_sampler_sample(smpl, g_ctx, -1);
+        llama_sampler_accept(smpl, new_token);
+
+        // Guard: if first token is EOS, skip it (model confused by prompt)
+        if (i == 0 && llama_vocab_is_eog(vocab, new_token)) continue;
 
         if (llama_vocab_is_eog(vocab, new_token)) break;
 
@@ -334,56 +399,93 @@ Java_com_aiope_inf_LlamaJNI_unloadLoraAdapter(JNIEnv *env, jobject /* this */) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_aiope_inf_LlamaJNI_applyChatTemplate(
     JNIEnv *env, jobject /* this */,
-    jstring messagesJson) {
+    jstring messagesJson, jstring toolsJson) {
 
-    std::lock_guard<std::mutex> lock(g_mutex);
+    // No mutex needed — only reads g_model which is stable during generation
     if (!g_model) return string_to_jstring(env, "");
 
-    std::string json_str = jstring_to_string(env, messagesJson);
+    std::string msgs_str = jstring_to_string(env, messagesJson);
+    std::string tools_str = toolsJson ? jstring_to_string(env, toolsJson) : "";
 
-    // Get template from model metadata
-    const char *tmpl = llama_model_chat_template(g_model, nullptr);
+    try {
+        // Initialize chat templates from model
+        auto tmpls = common_chat_templates_init(g_model, "");
+        if (!tmpls) return string_to_jstring(env, "");
 
-    // Parse messages JSON: [{"role":"user","content":"hi"},...]
-    // Simple parser for our known format
-    std::vector<llama_chat_message> messages;
-    std::vector<std::string> roles, contents;
-
-    size_t pos = 0;
-    while ((pos = json_str.find("\"role\"", pos)) != std::string::npos) {
-        size_t rs = json_str.find("\"", pos + 7) + 1;
-        size_t re = json_str.find("\"", rs);
-        roles.push_back(json_str.substr(rs, re - rs));
-
-        size_t cs = json_str.find("\"content\"", re);
-        cs = json_str.find("\"", cs + 10) + 1;
-        size_t ce = cs;
-        // Handle escaped quotes
-        while (ce < json_str.size()) {
-            ce = json_str.find("\"", ce);
-            if (ce == std::string::npos) break;
-            if (ce > 0 && json_str[ce-1] == '\\') { ce++; continue; }
-            break;
+        // Parse messages JSON into common_chat_msg vector
+        auto msgs_json = nlohmann::ordered_json::parse(msgs_str);
+        std::vector<common_chat_msg> messages;
+        for (auto &m : msgs_json) {
+            common_chat_msg msg;
+            msg.role = m.value("role", "");
+            if (m.contains("content") && m["content"].is_string()) {
+                msg.content = m["content"].get<std::string>();
+            } else if (m.contains("content") && m["content"].is_array()) {
+                // Multimodal content parts
+                for (auto &p : m["content"]) {
+                    common_chat_msg_content_part part;
+                    part.type = p.value("type", "text");
+                    if (part.type == "text") {
+                        part.text = p.value("text", "");
+                    }
+                    msg.content_parts.push_back(part);
+                }
+            }
+            // Tool calls from assistant
+            if (m.contains("tool_calls")) {
+                for (auto &tc : m["tool_calls"]) {
+                    common_chat_tool_call call;
+                    if (tc.contains("function")) {
+                        call.name = tc["function"].value("name", "");
+                        call.arguments = tc["function"].value("arguments", "");
+                        if (tc["function"].contains("arguments") && tc["function"]["arguments"].is_object()) {
+                            call.arguments = tc["function"]["arguments"].dump();
+                        }
+                    }
+                    if (tc.contains("id")) call.id = tc["id"].get<std::string>();
+                    msg.tool_calls.push_back(call);
+                }
+            }
+            // Tool response
+            if (m.contains("tool_call_id")) {
+                msg.tool_call_id = m["tool_call_id"].get<std::string>();
+            }
+            if (msg.role == "tool" && m.contains("name")) {
+                msg.tool_name = m["name"].get<std::string>();
+            }
+            // Tool responses (Gemma 4 format)
+            if (m.contains("tool_responses")) {
+                // Encode tool responses into content for the template
+                for (auto &tr : m["tool_responses"]) {
+                    common_chat_tool_call tc;
+                    tc.name = tr.value("name", "");
+                    tc.arguments = tr.contains("response") ? tr["response"].dump() : "";
+                    // Store as tool_call with response data for template rendering
+                }
+            }
+            messages.push_back(msg);
         }
-        contents.push_back(json_str.substr(cs, ce - cs));
-        pos = ce + 1;
-    }
 
-    for (size_t i = 0; i < roles.size(); i++) {
-        messages.push_back({roles[i].c_str(), contents[i].c_str()});
-    }
+        // Parse tools JSON
+        std::vector<common_chat_tool> tools;
+        if (!tools_str.empty()) {
+            auto tools_json = nlohmann::ordered_json::parse(tools_str);
+            tools = common_chat_tools_parse_oaicompat(tools_json);
+        }
 
-    // Apply template
-    std::vector<char> buf(4096);
-    int32_t n = llama_chat_apply_template(tmpl, messages.data(), messages.size(),
-                                          true, buf.data(), buf.size());
-    if (n < 0) {
-        // Buffer too small, resize
-        buf.resize(-n + 1);
-        n = llama_chat_apply_template(tmpl, messages.data(), messages.size(),
-                                      true, buf.data(), buf.size());
-    }
-    if (n < 0) return string_to_jstring(env, "");
+        // Build inputs
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.tools = tools;
+        inputs.add_generation_prompt = true;
+        inputs.use_jinja = true;
+        inputs.enable_thinking = false;
 
-    return string_to_jstring(env, std::string(buf.data(), n));
+        // Apply template
+        auto result = common_chat_templates_apply(tmpls.get(), inputs);
+        return string_to_jstring(env, result.prompt);
+    } catch (const std::exception &e) {
+        LOGE("applyChatTemplate error: %s", e.what());
+        return string_to_jstring(env, "");
+    }
 }

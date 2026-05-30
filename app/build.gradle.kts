@@ -5,12 +5,12 @@ plugins {
 
 android {
     namespace = "com.aiope.inf"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.aiope.inf"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
 
@@ -81,4 +81,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("androidx.activity:activity-ktx:1.8.2")
+    implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
+    // LiteRT-LM for GPU/NPU inference
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.12.0")
 }

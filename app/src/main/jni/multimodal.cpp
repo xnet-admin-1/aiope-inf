@@ -167,6 +167,116 @@ Java_com_aiope_inf_LlamaJNI_generateWithImage(
 }
 
 // ============================================================
+// JNI: Generate with audio input (ASR/transcription)
+// ============================================================
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_aiope_inf_LlamaJNI_generateWithAudio(
+    JNIEnv *env, jobject /* this */,
+    jstring prompt,
+    jfloatArray audioSamples,
+    jint maxTokens,
+    jfloat temperature,
+    jfloat topP) {
+
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_abort.store(false);
+
+    if (!g_model || !g_ctx || !g_mtmd) {
+        LOGE("Model or multimodal context not loaded");
+        return env->NewStringUTF("");
+    }
+
+    if (!mtmd_support_audio(g_mtmd)) {
+        LOGE("Model does not support audio");
+        return env->NewStringUTF("");
+    }
+
+    // Get audio samples (float PCM)
+    jsize n_samples = env->GetArrayLength(audioSamples);
+    jfloat *samples = env->GetFloatArrayElements(audioSamples, nullptr);
+
+    mtmd_bitmap *bitmap = mtmd_bitmap_init_from_audio((size_t)n_samples, (const float *)samples);
+    env->ReleaseFloatArrayElements(audioSamples, samples, JNI_ABORT);
+
+    if (!bitmap) {
+        LOGE("Failed to create audio bitmap");
+        return env->NewStringUTF("");
+    }
+
+    // Build prompt with audio marker
+    std::string prompt_str;
+    const char *chars = env->GetStringUTFChars(prompt, nullptr);
+    prompt_str = chars;
+    env->ReleaseStringUTFChars(prompt, chars);
+
+    const char *marker = mtmd_default_marker();
+    std::string full_prompt;
+    if (prompt_str.find(marker) == std::string::npos) {
+        full_prompt = std::string(marker) + "\n" + prompt_str;
+    } else {
+        full_prompt = prompt_str;
+    }
+
+    // Tokenize with audio chunk
+    mtmd_input_chunks *chunks = mtmd_input_chunks_init();
+    mtmd_input_text text_input = { full_prompt.c_str(), true, true };
+    const mtmd_bitmap *bitmaps[] = { bitmap };
+
+    int32_t tokenize_result = mtmd_tokenize(g_mtmd, chunks, &text_input, bitmaps, 1);
+    if (tokenize_result != 0) {
+        LOGE("Audio tokenization failed: %d", tokenize_result);
+        mtmd_input_chunks_free(chunks);
+        mtmd_bitmap_free(bitmap);
+        return env->NewStringUTF("");
+    }
+
+    // Eval all chunks
+    llama_memory_clear(llama_get_memory(g_ctx), true);
+    llama_pos n_past = 0;
+    int32_t eval_result = mtmd_helper_eval_chunks(g_mtmd, g_ctx, chunks, 0, 0,
+                                                   512, true, &n_past);
+    mtmd_input_chunks_free(chunks);
+    mtmd_bitmap_free(bitmap);
+
+    if (eval_result != 0) {
+        LOGE("Audio eval failed: %d", eval_result);
+        return env->NewStringUTF("");
+    }
+
+    // Generate response
+    const llama_vocab *vocab = llama_model_get_vocab(g_model);
+    auto *smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature > 0 ? temperature : 0.1f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(topP > 0 ? topP : 0.9f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(0));
+
+    std::string result;
+    int n_max = maxTokens > 0 ? maxTokens : 512;
+
+    for (int i = 0; i < n_max; i++) {
+        if (g_abort.load()) break;
+
+        llama_token new_token = llama_sampler_sample(smpl, g_ctx, -1);
+        if (llama_vocab_is_eog(vocab, new_token)) break;
+
+        char buf[256];
+        int n = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
+        if (n > 0) result.append(buf, n);
+
+        llama_batch next_batch = llama_batch_init(1, 0, 1);
+        common_batch_add(next_batch, new_token, n_past++, {0}, true);
+        if (llama_decode(g_ctx, next_batch) != 0) {
+            llama_batch_free(next_batch);
+            break;
+        }
+        llama_batch_free(next_batch);
+    }
+
+    llama_sampler_free(smpl);
+    return env->NewStringUTF(result.c_str());
+}
+
+// ============================================================
 // JNI: Free multimodal context
 // ============================================================
 extern "C" JNIEXPORT void JNICALL
