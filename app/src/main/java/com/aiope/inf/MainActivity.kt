@@ -381,23 +381,17 @@ class MainActivity : AppCompatActivity() {
         btnSend.text = "Test"
         btnSend.setOnClickListener {
             tvOutput.visibility = View.VISIBLE
-            tvOutput.text = "Testing..."
-            lifecycleScope.launch(Dispatchers.IO) {
+            tvOutput.text = "Generating..."
+            lifecycleScope.launch {
                 try {
-                    val body = """{"model":"test","messages":[{"role":"user","content":"Hi"}],"max_tokens":4,"stream":false}"""
-                    val req = java.net.URL("http://127.0.0.1:8008/v1/chat/completions").openConnection() as java.net.HttpURLConnection
-                    req.requestMethod = "POST"
-                    req.setRequestProperty("Content-Type", "application/json")
-                    req.doOutput = true
-                    req.connectTimeout = 5000
-                    req.readTimeout = 30000
-                    req.outputStream.write(body.toByteArray())
-                    val code = req.responseCode
-                    req.inputStream.close()
-                    req.disconnect()
-                    withContext(Dispatchers.Main) { tvOutput.text = "✓ $code OK" }
-                } catch (e: java.net.ConnectException) {
-                    withContext(Dispatchers.Main) { tvOutput.text = "❌ Server not running — toggle it on first" }
+                    val params = ModelManager.GenerateParams(maxTokens = 128, temperature = 0.7f)
+                    val sb = StringBuilder()
+                    withContext(Dispatchers.Main) { tvOutput.text = "" }
+                    modelManager.generateStream("Hello! Introduce yourself in one sentence.", params).collect { token ->
+                        sb.append(token)
+                        withContext(Dispatchers.Main) { tvOutput.text = sb.toString() }
+                    }
+                    if (sb.isEmpty()) withContext(Dispatchers.Main) { tvOutput.text = "❌ No tokens generated — is a model loaded?" }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) { tvOutput.text = "❌ ${e.javaClass.simpleName}: ${e.message}" }
                 }

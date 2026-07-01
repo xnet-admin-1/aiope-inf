@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <string>
+#include <vector>
 
 #ifdef AIOPE_VULKAN
 #include <vulkan/vulkan.h>

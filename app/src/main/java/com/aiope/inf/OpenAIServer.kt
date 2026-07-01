@@ -66,7 +66,7 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 val response = routeRequestSync(request)
                 android.util.Log.i("GATEWAY", "→ ${response.status} streaming=${response.isStreaming}")
 
-                if (response.isStreaming && response.streamData == "__LIVE_STREAM__") {
+                if (response.isStreaming && (response.streamData == "__LIVE_STREAM__" || response.streamData == "__LITERT_STREAM__")) {
                     val rawOutput = client.getOutputStream()
                     writeSseHeaders(rawOutput)
                     android.util.Log.i("GATEWAY", "SSE headers sent, starting generation")
@@ -105,8 +105,26 @@ class OpenAIServer(private val modelManager: ModelManager) {
         val model = body.optString("model", "local")
         val tools = body.optJSONArray("tools")
 
+        // Route to LiteRT-LM if active
+        if (modelManager.getActiveBackend() == ModelManager.InferenceBackend.LITERT_LM) {
+            val userMessage = extractLastUserMessage(messages)
+            android.util.Log.i("GATEWAY", "chatCompletion [LiteRT] stream=$stream")
+            if (stream) {
+                return HttpResponse(
+                    status = 200, statusText = "OK", contentType = "text/event-stream", body = "",
+                    isStreaming = true, streamData = "__LITERT_STREAM__",
+                    streamPrompt = userMessage, streamModel = model,
+                    streamMaxTokens = maxTokens, streamTemperature = temperature, streamTopP = topP
+                )
+            }
+            val result = kotlinx.coroutines.runBlocking {
+                modelManager.generate(userMessage, ModelManager.GenerateParams(maxTokens, temperature, topP))
+            }
+            return buildCompletionResponse(result, model)
+        }
+
         val prompt = buildChatPrompt(messages, tools)
-        android.util.Log.i("GATEWAY", "chatCompletion stream=$stream prompt_len=${prompt.length}")
+        android.util.Log.i("GATEWAY", "chatCompletion [llama.cpp] stream=$stream prompt_len=${prompt.length}")
         android.util.Log.d("GATEWAY", "prompt_start=${prompt.take(300)}")
 
         if (stream) {
@@ -119,27 +137,67 @@ class OpenAIServer(private val modelManager: ModelManager) {
         return buildCompletionResponse(result, model)
     }
 
+    private fun extractLastUserMessage(messages: JSONArray): String {
+        for (i in messages.length() - 1 downTo 0) {
+            val msg = messages.getJSONObject(i)
+            if (msg.optString("role") == "user") {
+                val content = msg.opt("content")
+                return when (content) {
+                    is String -> content
+                    is JSONArray -> (0 until content.length()).mapNotNull { j ->
+                        val p = content.getJSONObject(j)
+                        if (p.optString("type") == "text") p.optString("text") else null
+                    }.joinToString("\n")
+                    else -> msg.optString("content", "")
+                }
+            }
+        }
+        return ""
+    }
+
+    private fun extractSystemMessage(messages: JSONArray): String? {
+        for (i in 0 until messages.length()) {
+            val msg = messages.getJSONObject(i)
+            if (msg.optString("role") == "system") return msg.optString("content", null)
+        }
+        return null
+    }
+
     private fun streamTokensSync(output: OutputStream, response: HttpResponse) {
         val completionId = "chatcmpl-${java.util.UUID.randomUUID().toString().take(8)}"
         val model = response.streamModel
         var tokenCount = 0
 
-        android.util.Log.i("GATEWAY", "generateStreaming starting")
-        LlamaJNI().generateStreaming(
-            prompt = response.streamPrompt,
-            maxTokens = response.streamMaxTokens,
-            temperature = response.streamTemperature,
-            topP = response.streamTopP,
-            repeatPenalty = 1.1f,
-            callback = object : LlamaJNI.StreamCallback {
-                override fun onToken(token: String): Boolean {
+        if (response.streamData == "__LITERT_STREAM__") {
+            android.util.Log.i("GATEWAY", "LiteRT streaming starting")
+            kotlinx.coroutines.runBlocking {
+                val params = ModelManager.GenerateParams(response.streamMaxTokens, response.streamTemperature, response.streamTopP)
+                modelManager.generateStream(response.streamPrompt, params).collect { token ->
                     tokenCount++
-                    if (tokenCount <= 3) android.util.Log.i("GATEWAY", "token[$tokenCount]: ${token.take(20)}")
-                    try {
-                        val escaped = token.replace("\\", "\\\\").replace("\"", "\\\"")
-                            .replace("\n", "\\n").replace("\r", "\\r")
-                        val chunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"content":"$escaped"},"finish_reason":null}]}"""
-                        writeChunk(output, chunk + "\n\n")
+                    val escaped = token.replace("\\", "\\\\").replace("\"", "\\\"")
+                        .replace("\n", "\\n").replace("\r", "\\r")
+                    val chunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"content":"$escaped"},"finish_reason":null}]}"""
+                    writeChunk(output, chunk + "\n\n")
+                }
+            }
+            android.util.Log.i("GATEWAY", "LiteRT stream complete, tokens=$tokenCount")
+        } else {
+            android.util.Log.i("GATEWAY", "generateStreaming starting")
+            LlamaJNI().generateStreaming(
+                prompt = response.streamPrompt,
+                maxTokens = response.streamMaxTokens,
+                temperature = response.streamTemperature,
+                topP = response.streamTopP,
+                repeatPenalty = 1.1f,
+                callback = object : LlamaJNI.StreamCallback {
+                    override fun onToken(token: String): Boolean {
+                        tokenCount++
+                        if (tokenCount <= 3) android.util.Log.i("GATEWAY", "token[$tokenCount]: ${token.take(20)}")
+                        try {
+                            val escaped = token.replace("\\", "\\\\").replace("\"", "\\\"")
+                                .replace("\n", "\\n").replace("\r", "\\r")
+                            val chunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"content":"$escaped"},"finish_reason":null}]}"""
+                            writeChunk(output, chunk + "\n\n")
                         return true
                     } catch (e: Exception) {
                         android.util.Log.e("GATEWAY", "write failed: ${e.message}")
@@ -155,6 +213,7 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 }
             }
         )
+        }
 
         val done = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"""
         writeChunk(output, done + "\n\n")

@@ -11,3 +11,6 @@
 
 # Keep LlamaJNI class
 -keep class com.aiope.inf.LlamaJNI { *; }
+
+# Keep LiteRT-LM SDK (JNI callbacks from native)
+-keep class com.google.ai.edge.litertlm.** { *; }
