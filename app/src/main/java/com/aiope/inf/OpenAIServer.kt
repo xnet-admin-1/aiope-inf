@@ -301,7 +301,6 @@ class OpenAIServer(private val modelManager: ModelManager) {
         val completionId = "chatcmpl-${java.util.UUID.randomUUID().toString().take(8)}"
         val model = response.streamModel
         var tokenCount = 0
-        val fullResponse = StringBuilder()
 
         if (response.streamData == "__LITERT_STREAM__") {
             android.util.Log.i("GATEWAY", "LiteRT streaming starting")
@@ -309,7 +308,6 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 val params = ModelManager.GenerateParams(response.streamMaxTokens, response.streamTemperature, response.streamTopP)
                 modelManager.generateStream(response.streamPrompt, params).collect { token ->
                     tokenCount++
-                    fullResponse.append(token)
                     val escaped = token.replace("\\", "\\\\").replace("\"", "\\\"")
                         .replace("\n", "\\n").replace("\r", "\\r")
                     val chunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"content":"$escaped"},"finish_reason":null}]}"""
@@ -326,36 +324,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 topP = response.streamTopP,
                 repeatPenalty = 1.1f,
                 callback = object : LlamaJNI.StreamCallback {
-                    var inToolCall = false
-                    var inThinking = false
                     override fun onToken(token: String): Boolean {
                         tokenCount++
-                        fullResponse.append(token)
-                        // Detect tool call start — suppress from content stream
-                        if (token.contains("<|tool_call>") || inToolCall) {
-                            inToolCall = !token.contains("<tool_call|>") || !inToolCall
-                            if (token.contains("<tool_call|>")) inToolCall = false // end of this call but might be more
-                            if (fullResponse.contains("<|tool_call>") && !fullResponse.contains("<tool_call|>")) inToolCall = true
-                            return true
-                        }
-                        // Detect thinking channel — emit as reasoning_content
-                        if (token.contains("<|channel>") || inThinking) {
-                            inThinking = true
-                            if (token.contains("<channel|>")) {
-                                inThinking = false
-                            } else {
-                                val reasonToken = token.replace("<|channel>thought\n", "").replace("<|channel>", "")
-                                if (reasonToken.isNotEmpty()) {
-                                    try {
-                                        val escaped = reasonToken.replace("\\", "\\\\").replace("\"", "\\\"")
-                                            .replace("\n", "\\n").replace("\r", "\\r")
-                                        val chunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"reasoning_content":"$escaped"},"finish_reason":null}]}"""
-                                        writeChunk(output, chunk + "\n\n")
-                                    } catch (_: Exception) {}
-                                }
-                            }
-                            return true
-                        }
                         if (tokenCount <= 3) android.util.Log.i("GATEWAY", "token[$tokenCount]: ${token.take(20)}")
                         try {
                             val escaped = token.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -379,30 +349,7 @@ class OpenAIServer(private val modelManager: ModelManager) {
         )
         }
 
-        // Check if response contains tool calls — emit as structured tool_calls
-        val text = fullResponse.toString()
-        val toolCalls = parseGemmaToolCalls(text)
-        val finishReason = if (toolCalls.isNotEmpty()) "tool_calls" else "stop"
-
-        if (toolCalls.isNotEmpty()) {
-            // Emit tool_calls delta chunk
-            val toolCallsArr = JSONArray()
-            toolCalls.forEachIndexed { i, (name, args) ->
-                toolCallsArr.put(JSONObject().apply {
-                    put("index", i)
-                    put("id", "call_${UUID.randomUUID().toString().take(8)}")
-                    put("type", "function")
-                    put("function", JSONObject().apply {
-                        put("name", name)
-                        put("arguments", args)
-                    })
-                })
-            }
-            val tcChunk = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{"tool_calls":$toolCallsArr},"finish_reason":null}]}"""
-            writeChunk(output, tcChunk + "\n\n")
-        }
-
-        val done = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{},"finish_reason":"$finishReason"}]}"""
+        val done = """data: {"id":"$completionId","object":"chat.completion.chunk","created":${System.currentTimeMillis()/1000},"model":"$model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"""
         writeChunk(output, done + "\n\n")
         writeChunk(output, "data: [DONE]\n\n")
         output.flush()
