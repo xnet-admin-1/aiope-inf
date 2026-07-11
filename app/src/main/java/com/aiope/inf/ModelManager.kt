@@ -55,6 +55,15 @@ class ModelManager private constructor(private val context: Context) {
                 throw IllegalArgumentException("Model not found: $path")
             }
 
+            // Unload current model first to prevent OOM
+            if (currentModel != null) {
+                android.util.Log.i("ModelManager", "Unloading current model before loading new one: $currentModel")
+                unload()
+                // Give the system a moment to reclaim memory
+                System.gc()
+                Thread.sleep(200)
+            }
+
             // Route to LiteRT-LM for .litertlm files
             if (path.endsWith(".litertlm")) {
                 val accelerator = if (config.useVulkan) LiteRTEngine.AcceleratorType.GPU
@@ -83,13 +92,18 @@ class ModelManager private constructor(private val context: Context) {
                 }
             }
 
-            val success = jni.loadModel(
-                modelPath = path,
-                nGpuLayers = gpuLayers,
-                contextSize = config.contextSize,
-                batchSize = config.batchSize,
-                useVulkan = config.useVulkan && gpuLayers > 0
-            )
+            val success = try {
+                jni.loadModel(
+                    modelPath = path,
+                    nGpuLayers = gpuLayers,
+                    contextSize = config.contextSize,
+                    batchSize = config.batchSize,
+                    useVulkan = config.useVulkan && gpuLayers > 0
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("ModelManager", "Native model load crashed: ${e.message}", e)
+                false
+            }
 
             if (success) {
                 currentModel = file.name
@@ -216,7 +230,19 @@ class ModelManager private constructor(private val context: Context) {
     // Multimodal
     // ============================================================
 
-    fun initMultimodal(path: String): Boolean = jni.initMultimodal(path)
+    fun initMultimodal(path: String): Boolean {
+        return try {
+            if (!File(path).exists()) {
+                android.util.Log.e("ModelManager", "mmproj not found: $path")
+                false
+            } else {
+                jni.initMultimodal(path)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ModelManager", "Failed to init multimodal: ${e.message}", e)
+            false
+        }
+    }
 
     suspend fun generateWithImage(prompt: String, imageData: ByteArray, width: Int, height: Int, params: GenerateParams = GenerateParams()): String {
         return withContext(Dispatchers.IO) {
@@ -238,9 +264,19 @@ class ModelManager private constructor(private val context: Context) {
 
     suspend fun loadLoraAdapter(path: String, scale: Float = 1.0f): Boolean {
         return withContext(Dispatchers.IO) {
-            val success = jni.loadLoraAdapter(path, scale)
-            if (success) currentLora = File(path).name
-            success
+            try {
+                if (!File(path).exists()) {
+                    android.util.Log.e("ModelManager", "LoRA adapter not found: $path")
+                    return@withContext false
+                }
+                val success = jni.loadLoraAdapter(path, scale)
+                if (success) currentLora = File(path).name
+                else android.util.Log.e("ModelManager", "LoRA adapter load returned false: $path")
+                success
+            } catch (e: Exception) {
+                android.util.Log.e("ModelManager", "Failed to load LoRA adapter: ${e.message}", e)
+                false
+            }
         }
     }
 

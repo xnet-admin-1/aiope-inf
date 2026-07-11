@@ -25,6 +25,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
     private var serverThread: Thread? = null
     private val running = AtomicBoolean(false)
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val activeConnections = java.util.concurrent.atomic.AtomicInteger(0)
+    private val MAX_CONNECTIONS = 4
 
     fun start(port: Int = 8008) {
         if (running.get()) return
@@ -37,6 +39,16 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 while (running.get()) {
                     try {
                         val client = serverSocket?.accept() ?: break
+                        if (activeConnections.get() >= MAX_CONNECTIONS) {
+                            // Reject with 503
+                            try {
+                                val out = client.getOutputStream()
+                                out.write("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                                out.flush()
+                            } catch (_: Exception) {}
+                            client.close()
+                            continue
+                        }
                         client.soTimeout = 300000
                         Thread { handleClientSync(client) }.start()
                     } catch (e: Exception) {
@@ -56,6 +68,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
     }
 
     private fun handleClientSync(socket: Socket) {
+        activeConnections.incrementAndGet()
+        try {
         socket.use { client ->
             val input = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = BufferedOutputStream(client.getOutputStream())
@@ -70,7 +84,15 @@ class OpenAIServer(private val modelManager: ModelManager) {
                     val rawOutput = client.getOutputStream()
                     writeSseHeaders(rawOutput)
                     android.util.Log.i("GATEWAY", "SSE headers sent, starting generation")
-                    streamTokensSync(rawOutput, response)
+                    try {
+                        streamTokensSync(rawOutput, response)
+                    } catch (e: java.net.SocketException) {
+                        android.util.Log.w("GATEWAY", "Client disconnected during stream: ${e.message}")
+                    } catch (e: IOException) {
+                        android.util.Log.w("GATEWAY", "IO error during stream: ${e.message}")
+                    } catch (e: Exception) {
+                        android.util.Log.e("GATEWAY", "Stream error: ${e.message}", e)
+                    }
                     android.util.Log.i("GATEWAY", "SSE stream complete")
                 } else {
                     writeResponse(output, response)
@@ -83,6 +105,11 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 } catch (_: Exception) {}
             }
         }
+        } catch (e: Exception) {
+            android.util.Log.e("GATEWAY", "Fatal client handler error: ${e.message}", e)
+        } finally {
+            activeConnections.decrementAndGet()
+        }
     }
 
     private fun routeRequestSync(request: HttpRequest): HttpResponse {
@@ -90,8 +117,115 @@ class OpenAIServer(private val modelManager: ModelManager) {
             request.method == "OPTIONS" -> HttpResponse(204, "No Content", "text/plain", "")
             request.path == "/health" && request.method == "GET" -> healthCheck()
             request.path == "/v1/models" && request.method == "GET" -> listModels()
+            request.path == "/v1/config" && request.method == "POST" -> configEndpoint(request)
+            request.path == "/v1/config" && request.method == "GET" -> getConfig()
             request.path == "/v1/chat/completions" && request.method == "POST" -> chatCompletionSync(request)
             else -> errorResponse(404, "Not found: ${request.path}")
+        }
+    }
+
+    // ============================================================
+    // POST/GET /v1/config — GPU/CPU selector, model load/unload
+    // ============================================================
+
+    private var currentLoadConfig = ModelManager.LoadConfig()
+
+    private fun getConfig(): HttpResponse {
+        val json = JSONObject().apply {
+            put("backend", if (currentLoadConfig.useVulkan) "gpu" else "cpu")
+            put("gpu_layers", currentLoadConfig.gpuLayers)
+            put("auto_gpu_layers", currentLoadConfig.autoGpuLayers)
+            put("context_size", currentLoadConfig.contextSize)
+            put("batch_size", currentLoadConfig.batchSize)
+            put("model_loaded", modelManager.isLoaded())
+            put("active_backend", modelManager.getActiveBackend().name)
+            try { put("gpu_info", modelManager.getGpuInfo()) } catch (_: Exception) {}
+        }
+        return HttpResponse(200, "OK", "application/json", json.toString())
+    }
+
+    private fun configEndpoint(request: HttpRequest): HttpResponse {
+        return try {
+            val body = JSONObject(request.body)
+            val action = body.optString("action", "")
+
+            when (action) {
+                "set_backend" -> {
+                    val backend = body.optString("backend", "gpu") // "gpu" or "cpu"
+                    val gpuLayers = body.optInt("gpu_layers", 0)
+                    val autoGpu = body.optBoolean("auto_gpu_layers", backend == "gpu")
+                    val contextSize = body.optInt("context_size", currentLoadConfig.contextSize)
+                    val batchSize = body.optInt("batch_size", currentLoadConfig.batchSize)
+
+                    currentLoadConfig = ModelManager.LoadConfig(
+                        gpuLayers = gpuLayers,
+                        contextSize = contextSize,
+                        batchSize = batchSize,
+                        useVulkan = backend == "gpu",
+                        autoGpuLayers = autoGpu
+                    )
+                    val json = JSONObject().apply {
+                        put("status", "ok")
+                        put("backend", backend)
+                        put("config", JSONObject().apply {
+                            put("gpu_layers", currentLoadConfig.gpuLayers)
+                            put("auto_gpu_layers", currentLoadConfig.autoGpuLayers)
+                            put("context_size", currentLoadConfig.contextSize)
+                            put("use_vulkan", currentLoadConfig.useVulkan)
+                        })
+                    }
+                    HttpResponse(200, "OK", "application/json", json.toString())
+                }
+                "load_model" -> {
+                    val path = body.optString("path", "")
+                    if (path.isBlank()) return errorResponse(400, "Missing 'path'")
+                    val config = ModelManager.LoadConfig(
+                        gpuLayers = body.optInt("gpu_layers", currentLoadConfig.gpuLayers),
+                        contextSize = body.optInt("context_size", currentLoadConfig.contextSize),
+                        batchSize = body.optInt("batch_size", currentLoadConfig.batchSize),
+                        useVulkan = body.optBoolean("use_vulkan", currentLoadConfig.useVulkan),
+                        autoGpuLayers = body.optBoolean("auto_gpu_layers", currentLoadConfig.autoGpuLayers)
+                    )
+                    val success = kotlinx.coroutines.runBlocking { modelManager.loadModel(path, config) }
+                    val json = JSONObject().apply {
+                        put("status", if (success) "ok" else "failed")
+                        put("model_loaded", success)
+                    }
+                    HttpResponse(200, "OK", "application/json", json.toString())
+                }
+                "unload" -> {
+                    modelManager.unload()
+                    HttpResponse(200, "OK", "application/json", """{"status":"ok","model_loaded":false}""")
+                }
+                "load_mmproj" -> {
+                    val path = body.optString("path", "")
+                    if (path.isBlank()) return errorResponse(400, "Missing 'path'")
+                    val success = modelManager.initMultimodal(path)
+                    val json = JSONObject().apply {
+                        put("status", if (success) "ok" else "failed")
+                        put("multimodal_ready", success)
+                    }
+                    HttpResponse(200, "OK", "application/json", json.toString())
+                }
+                "load_lora" -> {
+                    val path = body.optString("path", "")
+                    val scale = body.optDouble("scale", 1.0).toFloat()
+                    if (path.isBlank()) return errorResponse(400, "Missing 'path'")
+                    val success = kotlinx.coroutines.runBlocking { modelManager.loadLoraAdapter(path, scale) }
+                    val json = JSONObject().apply {
+                        put("status", if (success) "ok" else "failed")
+                        put("lora_loaded", success)
+                    }
+                    HttpResponse(200, "OK", "application/json", json.toString())
+                }
+                "unload_lora" -> {
+                    modelManager.unloadLoraAdapter()
+                    HttpResponse(200, "OK", "application/json", """{"status":"ok","lora_loaded":false}""")
+                }
+                else -> errorResponse(400, "Unknown action: '$action'. Available: set_backend, load_model, unload, load_mmproj, load_lora, unload_lora")
+            }
+        } catch (e: Exception) {
+            errorResponse(500, "Config error: ${e.message}")
         }
     }
 
