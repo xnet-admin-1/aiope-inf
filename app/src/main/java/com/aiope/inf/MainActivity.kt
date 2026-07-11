@@ -241,8 +241,8 @@ class MainActivity : AppCompatActivity() {
                 tvInfo.text = if (useGpu) "Loading (GPU)..." else "Loading (CPU)..."
                 val success = modelManager.loadModel(path, ModelManager.LoadConfig(
                     useVulkan = useGpu,
-                    autoGpuLayers = useGpu,
-                    gpuLayers = if (useGpu) 99 else 0,
+                    autoGpuLayers = true,
+                    gpuLayers = if (useGpu) 0 else 0,  // auto will determine optimal layers
                     contextSize = 4096
                 ))
                 progress.visibility = View.GONE
