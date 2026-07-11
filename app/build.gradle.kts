@@ -83,8 +83,8 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.activity:activity-ktx:1.8.2")
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
-    // LiteRT-LM for GPU/NPU inference
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.14.0")
+    // LiteRT-LM for GPU/NPU inference (matching Play Store Edge Gallery version)
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.12.0")
     // TFLite GPU/TPU delegates (provides libLiteRt.so + libLiteRtClGlAccelerator.so)
     implementation("com.google.android.gms:play-services-tflite-java:16.4.0")
     implementation("com.google.android.gms:play-services-tflite-gpu:16.4.0")

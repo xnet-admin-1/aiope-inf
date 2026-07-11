@@ -123,6 +123,14 @@
                         android:textSize="13sp"
                         android:textColor="?android:attr/textColorSecondary" />
 
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/switch_gpu"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="GPU Acceleration"
+                        android:checked="true" />
+
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -189,6 +197,14 @@
                         android:text="Load Projector"
                         style="@style/Widget.Material3.Button.TonalButton"
                         app:icon="@drawable/ic_tune" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_unload_mmproj"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Eject"
+                        android:visibility="gone"
+                        style="@style/Widget.Material3.Button.OutlinedButton" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -231,6 +247,14 @@
                         android:text="Load Adapter"
                         style="@style/Widget.Material3.Button.TonalButton"
                         app:icon="@drawable/ic_tune" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_unload_lora"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Eject"
+                        android:visibility="gone"
+                        style="@style/Widget.Material3.Button.OutlinedButton" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

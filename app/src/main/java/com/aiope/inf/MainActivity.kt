@@ -235,10 +235,13 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
+                val gpuSwitch = findViewById<MaterialSwitch>(R.id.switch_gpu)
+                val useGpu = gpuSwitch.isChecked
+                tvInfo.text = if (useGpu) "Loading (GPU)..." else "Loading (CPU)..."
                 val success = modelManager.loadModel(path, ModelManager.LoadConfig(
-                    useVulkan = true,
-                    autoGpuLayers = false,
-                    gpuLayers = 99,
+                    useVulkan = useGpu,
+                    autoGpuLayers = useGpu,
+                    gpuLayers = if (useGpu) 99 else 0,
                     contextSize = 4096
                 ))
                 progress.visibility = View.GONE
@@ -274,7 +277,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupMmproj() {
         val btnMmproj = findViewById<MaterialButton>(R.id.btn_load_mmproj)
+        val btnUnloadMmproj = findViewById<MaterialButton>(R.id.btn_unload_mmproj)
         val tvMmproj = findViewById<TextView>(R.id.tv_mmproj_name)
+
+        btnUnloadMmproj.setOnClickListener {
+            modelManager.unloadMultimodal()
+            tvMmproj.text = "None"
+            btnUnloadMmproj.visibility = View.GONE
+            getPreferences(MODE_PRIVATE).edit().remove("last_mmproj").apply()
+            Toast.makeText(this, "Projector ejected", Toast.LENGTH_SHORT).show()
+        }
 
         btnMmproj.setOnClickListener {
             val mmprojDir = File(filesDir, "mmproj")
@@ -340,10 +352,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupLora() {
         val btnLora = findViewById<MaterialButton>(R.id.btn_load_lora)
+        val btnUnloadLora = findViewById<MaterialButton>(R.id.btn_unload_lora)
         val tvLora = findViewById<TextView>(R.id.tv_lora_name)
 
-        // Show current lora if already loaded
-        modelManager.getLoraName()?.let { tvLora.text = "✓ $it" }
+        modelManager.getLoraName()?.let {
+            tvLora.text = "✓ $it"
+            btnUnloadLora.visibility = View.VISIBLE
+        }
+
+        btnUnloadLora.setOnClickListener {
+            modelManager.unloadLoraAdapter()
+            tvLora.text = "None"
+            btnUnloadLora.visibility = View.GONE
+            getPreferences(MODE_PRIVATE).edit().remove("last_lora").apply()
+            Toast.makeText(this, "Adapter ejected", Toast.LENGTH_SHORT).show()
+        }
 
         btnLora.setOnClickListener {
             val loraDir = File(filesDir, "lora")
