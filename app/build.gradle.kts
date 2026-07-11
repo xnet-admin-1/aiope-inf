@@ -29,7 +29,7 @@ android {
                     "-DANDROID_STL=c++_shared",
                     "-DANDROID_TOOLCHAIN=clang",
                     "-DANDROID_PLATFORM=android-26",
-                    "-DAIOPE_VULKAN=OFF"
+                    "-DAIOPE_VULKAN=ON"
                 )
             }
         }

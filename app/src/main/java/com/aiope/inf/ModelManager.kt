@@ -67,15 +67,21 @@ class ModelManager private constructor(private val context: Context) {
 
             // Route to LiteRT-LM for .litertlm files
             if (path.endsWith(".litertlm")) {
-                val accelerator = if (config.useVulkan) LiteRTEngine.AcceleratorType.GPU
-                    else LiteRTEngine.AcceleratorType.CPU
+                val accelerator = when {
+                    // Tensor G5 specific models need NPU backend
+                    file.name.contains("Tensor_G5") || file.name.contains("tensor_g5") ->
+                        LiteRTEngine.AcceleratorType.NPU
+                    config.useVulkan -> LiteRTEngine.AcceleratorType.GPU
+                    else -> LiteRTEngine.AcceleratorType.CPU
+                }
                 val success = litertEngine!!.load(path, accelerator, config.contextSize)
                 if (success) {
                     litertEngine!!.createConversation()
                     currentModel = file.name
+                    currentModelPath = path
                     activeBackend = InferenceBackend.LITERT_LM
                 }
-                android.util.Log.d("ModelManager", "LiteRT-LM load=$success path=$path")
+                android.util.Log.d("ModelManager", "LiteRT-LM load=$success path=$path accelerator=$accelerator")
                 return@withContext success
             }
 
