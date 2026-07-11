@@ -236,6 +236,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
         val maxTokens = body.optInt("max_tokens", 512)
         val temperature = body.optDouble("temperature", 0.7).toFloat()
         val topP = body.optDouble("top_p", 0.9).toFloat()
+        val topK = body.optInt("top_k", 40)
+        val repeatPenalty = body.optDouble("repeat_penalty", 1.1).toFloat()
         val model = body.optString("model", "local")
         val tools = body.optJSONArray("tools")
         val requestedContext = body.optInt("context_length", 0)
@@ -273,12 +275,12 @@ class OpenAIServer(private val modelManager: ModelManager) {
         android.util.Log.d("GATEWAY", "prompt_start=${prompt.take(300)}")
 
         if (stream) {
-            return streamingCompletion(prompt, model, maxTokens, temperature, topP)
+            return streamingCompletion(prompt, model, maxTokens, temperature, topP, repeatPenalty)
         }
 
         // Blocking generation
         val jni = LlamaJNI()
-        val result = jni.generate(prompt, maxTokens, temperature, topP, 1.1f)
+        val result = jni.generate(prompt, maxTokens, temperature, topP, repeatPenalty)
         return buildCompletionResponse(result, model)
     }
 
@@ -333,7 +335,7 @@ class OpenAIServer(private val modelManager: ModelManager) {
                 maxTokens = response.streamMaxTokens,
                 temperature = response.streamTemperature,
                 topP = response.streamTopP,
-                repeatPenalty = 1.1f,
+                repeatPenalty = response.streamRepeatPenalty,
                 callback = object : LlamaJNI.StreamCallback {
                     override fun onToken(token: String): Boolean {
                         tokenCount++
@@ -405,7 +407,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
         val streamModel: String = "",
         val streamMaxTokens: Int = 512,
         val streamTemperature: Float = 0.7f,
-        val streamTopP: Float = 0.9f
+        val streamTopP: Float = 0.9f,
+        val streamRepeatPenalty: Float = 1.1f
     )
 
     private fun parseRequest(reader: BufferedReader): HttpRequest {
@@ -637,9 +640,10 @@ class OpenAIServer(private val modelManager: ModelManager) {
         model: String,
         maxTokens: Int,
         temperature: Float,
-        topP: Float
+        topP: Float,
+        repeatPenalty: Float = 1.1f
     ): HttpResponse {
-        val result = LlamaJNI().generate(prompt, maxTokens, temperature, topP, 1.1f)
+        val result = LlamaJNI().generate(prompt, maxTokens, temperature, topP, repeatPenalty)
         return buildCompletionResponse(result, model)
     }
 
@@ -648,7 +652,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
         model: String,
         maxTokens: Int,
         temperature: Float,
-        topP: Float
+        topP: Float,
+        repeatPenalty: Float = 1.1f
     ): HttpResponse {
         // Return a special marker — actual streaming handled in handleClient
         return HttpResponse(
@@ -662,7 +667,8 @@ class OpenAIServer(private val modelManager: ModelManager) {
             streamModel = model,
             streamMaxTokens = maxTokens,
             streamTemperature = temperature,
-            streamTopP = topP
+            streamTopP = topP,
+            streamRepeatPenalty = repeatPenalty
         )
     }
 
