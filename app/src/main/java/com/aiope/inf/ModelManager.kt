@@ -118,9 +118,19 @@ class ModelManager private constructor(private val context: Context) {
 
     fun unload() {
         jni.unloadModel()
+        try { jni.freeMultimodal() } catch (_: Exception) {}
+        try { jni.unloadLoraAdapter() } catch (_: Exception) {}
         litertEngine?.close()
         currentModel = null
+        currentModelPath = null
+        currentLora = null
         activeBackend = InferenceBackend.LLAMA_CPP
+    }
+
+    /** Unload only the multimodal projector (vision encoder) */
+    fun unloadMultimodal() {
+        try { jni.freeMultimodal() } catch (_: Exception) {}
+        android.util.Log.i("ModelManager", "Multimodal projector unloaded")
     }
 
     fun isLoaded(): Boolean = currentModel != null || try { JSONObject(jni.getModelInfo()).has("n_params") } catch (_: Exception) { false }

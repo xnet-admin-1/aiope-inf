@@ -222,7 +222,11 @@ class OpenAIServer(private val modelManager: ModelManager) {
                     modelManager.unloadLoraAdapter()
                     HttpResponse(200, "OK", "application/json", """{"status":"ok","lora_loaded":false}""")
                 }
-                else -> errorResponse(400, "Unknown action: '$action'. Available: set_backend, load_model, unload, load_mmproj, load_lora, unload_lora")
+                "unload_mmproj" -> {
+                    modelManager.unloadMultimodal()
+                    HttpResponse(200, "OK", "application/json", """{"status":"ok","multimodal_loaded":false}""")
+                }
+                else -> errorResponse(400, "Unknown action: '$action'. Available: set_backend, load_model, unload, load_mmproj, unload_mmproj, load_lora, unload_lora")
             }
         } catch (e: Exception) {
             errorResponse(500, "Config error: ${e.message}")
