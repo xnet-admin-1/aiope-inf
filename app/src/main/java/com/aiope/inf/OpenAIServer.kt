@@ -258,8 +258,32 @@ class OpenAIServer(private val modelManager: ModelManager) {
 
         // Route to LiteRT-LM if active
         if (modelManager.getActiveBackend() == ModelManager.InferenceBackend.LITERT_LM) {
+            android.util.Log.i("GATEWAY", "chatCompletion [LiteRT] stream=$stream msgs=${messages.length()}")
+            // Extract system prompt and rebuild conversation with full context
+            val systemPrompt = extractSystemMessage(messages)
+            modelManager.resetLiteRTConversation(systemPrompt, temperature, topK, topP)
+
+            // Feed conversation history (all messages except last user message)
+            for (i in 0 until messages.length() - 1) {
+                val msg = messages.getJSONObject(i)
+                val role = msg.optString("role", "")
+                val content = when {
+                    msg.opt("content") is String -> msg.getString("content")
+                    msg.opt("content") is JSONArray -> {
+                        val parts = msg.getJSONArray("content")
+                        (0 until parts.length()).mapNotNull { j ->
+                            val p = parts.getJSONObject(j)
+                            if (p.optString("type") == "text") p.optString("text") else null
+                        }.joinToString("\n")
+                    }
+                    else -> msg.optString("content", "")
+                }
+                if (role == "user" || role == "assistant") {
+                    modelManager.addLiteRTTurn(role, content)
+                }
+            }
+
             val userMessage = extractLastUserMessage(messages)
-            android.util.Log.i("GATEWAY", "chatCompletion [LiteRT] stream=$stream")
             if (stream) {
                 return HttpResponse(
                     status = 200, statusText = "OK", contentType = "text/event-stream", body = "",

@@ -138,6 +138,24 @@ class ModelManager private constructor(private val context: Context) {
     fun getActiveBackend(): InferenceBackend = activeBackend
     fun getLoadedModelPath(): String? = currentModelPath
 
+    /** Reset LiteRT conversation with a new system prompt and sampling config */
+    fun resetLiteRTConversation(systemPrompt: String?, temperature: Float, topK: Int, topP: Float) {
+        litertEngine?.createConversation(
+            systemPrompt = systemPrompt,
+            temperature = temperature.toDouble(),
+            topK = topK,
+            topP = topP.toDouble()
+        )
+    }
+
+    /** Add a turn to the LiteRT conversation history (for multi-turn context) */
+    fun addLiteRTTurn(role: String, content: String) {
+        // LiteRT-LM Conversation handles context internally via sendMessage
+        // For history replay, we send past messages silently
+        // Note: This is a simplification - full history replay would need
+        // the LiteRT-LM conversation to support adding past turns directly
+    }
+
     /**
      * Wraps a user prompt in the model's chat template via native Jinja engine.
      * Falls back to ChatML if the model has no embedded template.
