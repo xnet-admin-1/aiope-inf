@@ -84,5 +84,5 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.8.2")
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
     // LiteRT-LM for GPU/NPU inference
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.12.0")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.14.0")
 }
