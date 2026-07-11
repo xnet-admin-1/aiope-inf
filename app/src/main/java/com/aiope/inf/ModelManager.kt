@@ -42,7 +42,7 @@ class ModelManager private constructor(private val context: Context) {
 
     data class LoadConfig(
         val gpuLayers: Int = 0,
-        val contextSize: Int = 2048,
+        val contextSize: Int = 8192,
         val batchSize: Int = 512,
         val useVulkan: Boolean = true,
         val autoGpuLayers: Boolean = true
