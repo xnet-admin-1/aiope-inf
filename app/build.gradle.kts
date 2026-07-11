@@ -85,4 +85,8 @@ dependencies {
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
     // LiteRT-LM for GPU/NPU inference
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.14.0")
+    // TFLite GPU/TPU delegates (provides libLiteRt.so + libLiteRtClGlAccelerator.so)
+    implementation("com.google.android.gms:play-services-tflite-java:16.4.0")
+    implementation("com.google.android.gms:play-services-tflite-gpu:16.4.0")
+    implementation("com.google.android.gms:play-services-tflite-support:16.4.0")
 }
