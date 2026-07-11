@@ -218,6 +218,7 @@ class MainActivity : AppCompatActivity() {
                 val tvLora = findViewById<TextView>(R.id.tv_lora_name)
                 val success = modelManager.loadLoraAdapter(dest.absolutePath)
                 tvLora.text = if (success) "✓ $filename" else "Failed to load"
+                if (success) findViewById<MaterialButton>(R.id.btn_unload_lora).visibility = View.VISIBLE
                 if (success) getPreferences(MODE_PRIVATE).edit().putString("last_lora", dest.absolutePath).apply()
             }
         }
@@ -303,6 +304,7 @@ class MainActivity : AppCompatActivity() {
                         lifecycleScope.launch {
                             val success = withContext(Dispatchers.IO) { modelManager.initMultimodal(projectors[which].absolutePath) }
                             tvMmproj.text = if (success) "✓ ${projectors[which].name}" else "Failed to load"
+                            if (success) findViewById<MaterialButton>(R.id.btn_unload_mmproj).visibility = View.VISIBLE
                             if (success) getPreferences(MODE_PRIVATE).edit().putString("last_mmproj", projectors[which].absolutePath).apply()
                         }
                     } else {
@@ -330,6 +332,7 @@ class MainActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 val tvMmproj = findViewById<TextView>(R.id.tv_mmproj_name)
                 tvMmproj.text = if (success) "✓ $filename" else "Failed to load"
+                if (success) findViewById<MaterialButton>(R.id.btn_unload_mmproj).visibility = View.VISIBLE
                 if (success) getPreferences(MODE_PRIVATE).edit().putString("last_mmproj", dest.absolutePath).apply()
                 Toast.makeText(this@MainActivity, if (success) "Projector loaded" else "Failed to load projector", Toast.LENGTH_SHORT).show()
             }
@@ -343,6 +346,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val success = withContext(Dispatchers.IO) { modelManager.initMultimodal(path) }
             tvMmproj.text = if (success) "✓ ${File(path).name}" else ""
+            if (success) findViewById<MaterialButton>(R.id.btn_unload_mmproj).visibility = View.VISIBLE
         }
     }
 
@@ -384,6 +388,7 @@ class MainActivity : AppCompatActivity() {
                             val success = modelManager.loadLoraAdapter(adapters[which].absolutePath)
                             tvLora.text = if (success) "✓ ${adapters[which].name}" else "Failed to load"
                             if (success) getPreferences(MODE_PRIVATE).edit().putString("last_lora", adapters[which].absolutePath).apply()
+                            if (success) findViewById<MaterialButton>(R.id.btn_unload_lora).visibility = View.VISIBLE
                         }
                     } else {
                         loraPicker.launch(arrayOf("*/*"))
@@ -439,6 +444,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val success = modelManager.loadLoraAdapter(path)
             tvLora.text = if (success) "✓ ${File(path).name}" else ""
+            if (success) findViewById<MaterialButton>(R.id.btn_unload_lora).visibility = View.VISIBLE
         }
     }
 
