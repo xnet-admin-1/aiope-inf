@@ -25,6 +25,7 @@ class ModelManager private constructor(private val context: Context) {
     private val jni = LlamaJNI()
     private val modelDir = File(context.filesDir, "models")
     private var currentModel: String? = null
+    private var currentModelPath: String? = null
     private var currentLora: String? = null
     private var litertEngine: LiteRTEngine? = null
     private var activeBackend: InferenceBackend = InferenceBackend.LLAMA_CPP
@@ -42,7 +43,7 @@ class ModelManager private constructor(private val context: Context) {
 
     data class LoadConfig(
         val gpuLayers: Int = 0,
-        val contextSize: Int = 8192,
+        val contextSize: Int = 2048,
         val batchSize: Int = 512,
         val useVulkan: Boolean = true,
         val autoGpuLayers: Boolean = true
@@ -107,6 +108,7 @@ class ModelManager private constructor(private val context: Context) {
 
             if (success) {
                 currentModel = file.name
+                currentModelPath = path
                 activeBackend = InferenceBackend.LLAMA_CPP
             }
             android.util.Log.d("ModelManager", "loadModel result=$success path=$path gpuLayers=$gpuLayers currentModel=$currentModel")
@@ -124,6 +126,7 @@ class ModelManager private constructor(private val context: Context) {
     fun isLoaded(): Boolean = currentModel != null || try { JSONObject(jni.getModelInfo()).has("n_params") } catch (_: Exception) { false }
 
     fun getActiveBackend(): InferenceBackend = activeBackend
+    fun getLoadedModelPath(): String? = currentModelPath
 
     /**
      * Wraps a user prompt in the model's chat template via native Jinja engine.

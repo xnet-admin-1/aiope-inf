@@ -238,6 +238,17 @@ class OpenAIServer(private val modelManager: ModelManager) {
         val topP = body.optDouble("top_p", 0.9).toFloat()
         val model = body.optString("model", "local")
         val tools = body.optJSONArray("tools")
+        val requestedContext = body.optInt("context_length", 0)
+
+        // Resize context if client requests more than currently configured
+        if (requestedContext > 0 && requestedContext > currentLoadConfig.contextSize) {
+            android.util.Log.i("GATEWAY", "Client requested context_length=$requestedContext, current=${currentLoadConfig.contextSize}. Reloading.")
+            currentLoadConfig = currentLoadConfig.copy(contextSize = requestedContext)
+            val modelPath = modelManager.getLoadedModelPath()
+            if (modelPath != null) {
+                kotlinx.coroutines.runBlocking { modelManager.loadModel(modelPath, currentLoadConfig) }
+            }
+        }
 
         // Route to LiteRT-LM if active
         if (modelManager.getActiveBackend() == ModelManager.InferenceBackend.LITERT_LM) {
