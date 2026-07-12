@@ -60,7 +60,6 @@ class ModelManager private constructor(private val context: Context) {
             if (currentModel != null) {
                 android.util.Log.i("ModelManager", "Unloading current model before loading new one: $currentModel")
                 unload()
-                // Give the system a moment to reclaim memory
                 System.gc()
                 Thread.sleep(200)
             }
@@ -131,9 +130,11 @@ class ModelManager private constructor(private val context: Context) {
     }
 
     fun unload() {
-        jni.unloadModel()
-        try { jni.freeMultimodal() } catch (_: Exception) {}
-        try { jni.unloadLoraAdapter() } catch (_: Exception) {}
+        if (currentModel != null || activeBackend == InferenceBackend.LITERT_LM) {
+            try { jni.unloadModel() } catch (_: Exception) {}
+            try { jni.freeMultimodal() } catch (_: Exception) {}
+            try { jni.unloadLoraAdapter() } catch (_: Exception) {}
+        }
         litertEngine?.close()
         currentModel = null
         currentModelPath = null
