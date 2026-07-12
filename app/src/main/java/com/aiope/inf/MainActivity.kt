@@ -249,7 +249,8 @@ class MainActivity : AppCompatActivity() {
 
                 if (success) {
                     val info = modelManager.getModelInfo()
-                    tvName.text = info.optString("description", path.substringAfterLast("/"))
+                    val filename = path.substringAfterLast("/").removeSuffix(".gguf")
+                    tvName.text = filename
                     val params = info.optLong("n_params", 0) / 1_000_000
                     val size = info.optLong("size", 0) / (1024 * 1024)
                     tvInfo.text = "${params}M params · ${size}MB · GPU layers: ${info.optInt("gpu_layers")}"
