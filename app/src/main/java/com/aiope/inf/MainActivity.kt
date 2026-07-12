@@ -240,9 +240,9 @@ class MainActivity : AppCompatActivity() {
                 val useGpu = gpuSwitch.isChecked
                 tvInfo.text = if (useGpu) "Loading (GPU)..." else "Loading (CPU)..."
                 val success = modelManager.loadModel(path, ModelManager.LoadConfig(
-                    useVulkan = false,  // Vulkan crashes on PowerVR — use CPU for GGUF, LiteRT for GPU
-                    autoGpuLayers = false,
-                    gpuLayers = 0,
+                    useVulkan = useGpu,
+                    autoGpuLayers = useGpu,
+                    gpuLayers = 0,  // autoGpuLayers will determine safe count
                     contextSize = 4096
                 ))
                 progress.visibility = View.GONE

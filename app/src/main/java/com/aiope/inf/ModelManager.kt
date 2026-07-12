@@ -91,7 +91,15 @@ class ModelManager private constructor(private val context: Context) {
                 try {
                     val gpuOk = jni.initGpu()
                     if (gpuOk) {
-                        gpuLayers = jni.recommendGpuLayers(file.length(), 32)
+                        // Check if GPU is compatible (PowerVR/Imagination crashes with Vulkan compute)
+                        val gpuInfo = org.json.JSONObject(jni.getGpuInfo())
+                        val deviceName = gpuInfo.optString("device_name", "").lowercase()
+                        if (deviceName.contains("powervr") || deviceName.contains("imagination") || deviceName.contains("img")) {
+                            android.util.Log.w("ModelManager", "PowerVR GPU detected — Vulkan compute not supported, using CPU")
+                            gpuLayers = 0
+                        } else {
+                            gpuLayers = jni.recommendGpuLayers(file.length(), 32)
+                        }
                     }
                 } catch (e: Exception) {
                     android.util.Log.e("ModelManager", "GPU init failed, using CPU only", e)
