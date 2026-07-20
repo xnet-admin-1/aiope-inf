@@ -236,14 +236,21 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val gpuSwitch = findViewById<MaterialSwitch>(R.id.switch_gpu)
-                val useGpu = gpuSwitch.isChecked
-                tvInfo.text = if (useGpu) "Loading (GPU)..." else "Loading (CPU)..."
+                val chipGroup = findViewById<com.google.android.material.chip.ChipGroup>(R.id.chip_group_backend)
+                val selectedBackend = when (chipGroup.checkedChipId) {
+                    R.id.chip_cpu -> "cpu"
+                    R.id.chip_npu -> "npu"
+                    else -> "gpu"
+                }
+                val useGpu = selectedBackend == "gpu"
+                val useNpu = selectedBackend == "npu"
+                tvInfo.text = "Loading ($selectedBackend)..."
                 val success = modelManager.loadModel(path, ModelManager.LoadConfig(
                     useVulkan = useGpu,
                     autoGpuLayers = useGpu,
-                    gpuLayers = 0,  // autoGpuLayers will determine safe count
-                    contextSize = 4096
+                    gpuLayers = 0,
+                    contextSize = 4096,
+                    backend = selectedBackend
                 ))
                 progress.visibility = View.GONE
 

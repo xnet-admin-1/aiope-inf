@@ -33,7 +33,10 @@
 
         <!-- GPU acceleration via LiteRT-LM -->
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <!-- NPU/EdgeTPU dispatch for Tensor G5 -->
+        <uses-native-library android:name="libedgetpu_litert.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

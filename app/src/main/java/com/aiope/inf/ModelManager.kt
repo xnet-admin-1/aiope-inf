@@ -46,7 +46,8 @@ class ModelManager private constructor(private val context: Context) {
         val contextSize: Int = 2048,
         val batchSize: Int = 512,
         val useVulkan: Boolean = true,
-        val autoGpuLayers: Boolean = true
+        val autoGpuLayers: Boolean = true,
+        val backend: String = "gpu"  // "cpu", "gpu", or "npu"
     )
 
     suspend fun loadModel(path: String, config: LoadConfig = LoadConfig()): Boolean {
@@ -66,12 +67,10 @@ class ModelManager private constructor(private val context: Context) {
 
             // Route to LiteRT-LM for .litertlm files
             if (path.endsWith(".litertlm")) {
-                val accelerator = when {
-                    // Tensor G5 specific models need NPU backend
-                    file.name.contains("Tensor_G5") || file.name.contains("tensor_g5") ->
-                        LiteRTEngine.AcceleratorType.NPU
-                    config.useVulkan -> LiteRTEngine.AcceleratorType.GPU
-                    else -> LiteRTEngine.AcceleratorType.CPU
+                val accelerator = when (config.backend) {
+                    "npu" -> LiteRTEngine.AcceleratorType.NPU
+                    "cpu" -> LiteRTEngine.AcceleratorType.CPU
+                    else -> LiteRTEngine.AcceleratorType.GPU
                 }
                 val success = litertEngine!!.load(path, accelerator, config.contextSize)
                 if (success) {

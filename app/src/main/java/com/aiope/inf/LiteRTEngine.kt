@@ -49,8 +49,14 @@ class LiteRTEngine(private val context: Context) {
         topP: Double = 0.9
     ) {
         conversation?.close()
+        // Append /no_think to system prompt for models with thinking mode (e.g. Qwen3)
+        // to prevent template mismatch when replaying conversation history
+        val effectivePrompt = when {
+            systemPrompt != null -> "$systemPrompt\n/no_think"
+            else -> "/no_think"
+        }
         conversation = engine?.createConversation(ConversationConfig(
-            systemInstruction = systemPrompt?.let { Contents.of(it) },
+            systemInstruction = Contents.of(effectivePrompt),
             samplerConfig = SamplerConfig(topK = topK, topP = topP, temperature = temperature)
         ))
     }
