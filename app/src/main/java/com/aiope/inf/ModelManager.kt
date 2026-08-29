@@ -354,10 +354,20 @@ class ModelManager private constructor(private val context: Context) {
     // ============================================================
 
     fun listModels(): List<ModelFile> {
-        return modelDir.listFiles()
-            ?.filter { it.extension == "gguf" && it.length() > 1024 }
+        val files = modelDir.listFiles()
+            ?.filter { (it.extension == "gguf" || it.extension == "litertlm") && it.length() > 1024 }
             ?.map { ModelFile(it.name, it.length(), it.absolutePath) }
-            ?: emptyList()
+            ?.toMutableList()
+            ?: mutableListOf()
+
+        // Always include the currently loaded model even if not in modelDir
+        if (currentModel != null && files.none { it.name == currentModel }) {
+            val path = currentModelPath ?: ""
+            val size = if (path.isNotEmpty()) File(path).length() else 0L
+            files.add(ModelFile(currentModel!!, size, path))
+        }
+
+        return files
     }
 
     fun deleteModel(filename: String): Boolean {
